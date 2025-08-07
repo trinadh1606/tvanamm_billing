@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 
 interface PrinterDevice {
@@ -8,17 +8,158 @@ interface PrinterDevice {
   characteristic?: BluetoothRemoteGATTCharacteristic;
 }
 
+interface SystemCompatibility {
+  hasWebBluetooth: boolean;
+  isHttps: boolean;
+  isWindows: boolean;
+  windowsVersion?: string;
+  browserInfo: {
+    name: string;
+    version: string;
+    isSupported: boolean;
+  };
+  recommendations: string[];
+}
+
+interface PrintFallbackOptions {
+  generatePDF: (billData: any) => void;
+  copyToClipboard: (billData: any) => void;
+  printToSystemPrinter: (billData: any) => void;
+  emailReceipt: (billData: any) => void;
+}
+
 export function useBluetoothPrinter() {
   const [connectedPrinter, setConnectedPrinter] = useState<PrinterDevice | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [compatibility, setCompatibility] = useState<SystemCompatibility | null>(null);
   const { toast } = useToast();
 
+  // System compatibility detection
+  const detectSystemCompatibility = useCallback((): SystemCompatibility => {
+    const hasWebBluetooth = typeof navigator !== 'undefined' && 'bluetooth' in navigator;
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    
+    // Detect Windows
+    const userAgent = navigator.userAgent || '';
+    const isWindows = userAgent.includes('Windows');
+    let windowsVersion = '';
+    
+    if (isWindows) {
+      if (userAgent.includes('Windows NT 10.0')) {
+        windowsVersion = userAgent.includes('22000') ? 'Windows 11' : 'Windows 10';
+      } else if (userAgent.includes('Windows NT 6.3')) {
+        windowsVersion = 'Windows 8.1';
+      } else if (userAgent.includes('Windows NT 6.1')) {
+        windowsVersion = 'Windows 7';
+      }
+    }
+
+    // Browser detection
+    let browserName = 'Unknown';
+    let browserVersion = '';
+    let isSupported = false;
+
+    if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) {
+      browserName = 'Chrome';
+      const chromeMatch = userAgent.match(/Chrome\/(\d+)/);
+      browserVersion = chromeMatch ? chromeMatch[1] : '';
+      isSupported = parseInt(browserVersion) >= 56;
+    } else if (userAgent.includes('Edg')) {
+      browserName = 'Microsoft Edge';
+      const edgeMatch = userAgent.match(/Edg\/(\d+)/);
+      browserVersion = edgeMatch ? edgeMatch[1] : '';
+      isSupported = parseInt(browserVersion) >= 79;
+    } else if (userAgent.includes('Firefox')) {
+      browserName = 'Firefox';
+      isSupported = false; // Firefox doesn't support Web Bluetooth
+    } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
+      browserName = 'Safari';
+      isSupported = false; // Safari doesn't support Web Bluetooth
+    }
+
+    const recommendations: string[] = [];
+    
+    if (!isHttps) {
+      recommendations.push('Switch to HTTPS (Web Bluetooth requires secure connection)');
+    }
+    if (!isSupported) {
+      recommendations.push('Use Chrome 56+ or Microsoft Edge 79+ for Bluetooth support');
+    }
+    if (isWindows && windowsVersion && !windowsVersion.includes('10') && !windowsVersion.includes('11')) {
+      recommendations.push('Upgrade to Windows 10 or 11 for better Bluetooth support');
+    }
+    if (isWindows) {
+      recommendations.push('Ensure Bluetooth is enabled in Windows Settings');
+      recommendations.push('Install EPOS printer drivers from manufacturer');
+      recommendations.push('Allow Bluetooth access in browser settings');
+    }
+
+    return {
+      hasWebBluetooth,
+      isHttps,
+      isWindows,
+      windowsVersion,
+      browserInfo: {
+        name: browserName,
+        version: browserVersion,
+        isSupported
+      },
+      recommendations
+    };
+  }, []);
+
+  // Initialize compatibility check
+  useEffect(() => {
+    const compat = detectSystemCompatibility();
+    setCompatibility(compat);
+    
+    // Log compatibility info for debugging
+    console.log('System Compatibility:', compat);
+  }, [detectSystemCompatibility]);
+
   const connectPrinter = useCallback(async () => {
-    if (!navigator.bluetooth) {
+    // Enhanced compatibility check
+    if (!compatibility) {
+      toast({
+        title: "System Check in Progress",
+        description: "Please wait while we check system compatibility",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Comprehensive error handling with Windows-specific messages
+    if (!compatibility.hasWebBluetooth) {
+      const message = compatibility.isWindows 
+        ? `Web Bluetooth not supported in ${compatibility.browserInfo.name}. Please use Chrome 56+ or Microsoft Edge 79+`
+        : "Your browser doesn't support Web Bluetooth API";
+      
       toast({
         title: "Bluetooth Not Supported",
-        description: "Your browser doesn't support Web Bluetooth API",
+        description: message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!compatibility.isHttps) {
+      toast({
+        title: "HTTPS Required",
+        description: "Web Bluetooth requires HTTPS connection. Please access via https://",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!compatibility.browserInfo.isSupported) {
+      const message = compatibility.isWindows
+        ? `${compatibility.browserInfo.name} ${compatibility.browserInfo.version} doesn't support Web Bluetooth. Please update to Chrome 56+ or Edge 79+`
+        : "Please use a supported browser (Chrome or Edge)";
+      
+      toast({
+        title: "Browser Not Supported",
+        description: message,
         variant: "destructive",
       });
       return;
@@ -65,15 +206,37 @@ export function useBluetoothPrinter() {
       });
     } catch (error) {
       console.error('Failed to connect printer:', error);
+      
+      let errorMessage = "Failed to connect to printer";
+      let troubleshootingTips = "";
+      
+      if (error instanceof Error) {
+        if (error.message.includes('User cancelled')) {
+          errorMessage = "Connection cancelled by user";
+        } else if (error.message.includes('Bluetooth adapter not available')) {
+          errorMessage = compatibility?.isWindows 
+            ? "Bluetooth not available. Check Windows Bluetooth settings"
+            : "Bluetooth adapter not available";
+          troubleshootingTips = compatibility?.isWindows 
+            ? "Go to Settings > Devices > Bluetooth & other devices and ensure Bluetooth is ON"
+            : "";
+        } else if (error.message.includes('GATT operation failed')) {
+          errorMessage = "Printer connection failed";
+          troubleshootingTips = compatibility?.isWindows
+            ? "Try: 1) Install EPOS drivers 2) Restart browser 3) Reset Bluetooth"
+            : "";
+        }
+      }
+      
       toast({
         title: "Connection Failed",
-        description: "Failed to connect to printer",
+        description: `${errorMessage}${troubleshootingTips ? `. ${troubleshootingTips}` : ''}`,
         variant: "destructive",
       });
     } finally {
       setIsConnecting(false);
     }
-  }, [toast]);
+  }, [toast, compatibility]);
 
   const disconnectPrinter = useCallback(async () => {
     if (connectedPrinter?.server) {
@@ -165,11 +328,83 @@ export function useBluetoothPrinter() {
     return receipt;
   };
 
+  // Fallback printing methods
+  const fallbackOptions: PrintFallbackOptions = {
+    generatePDF: (billData: any) => {
+      const receiptText = formatReceipt(billData);
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(`
+          <html>
+            <head><title>Receipt</title></head>
+            <body style="font-family: monospace; white-space: pre-line; padding: 20px;">
+              ${receiptText.replace(/\n/g, '<br>')}
+            </body>
+          </html>
+        `);
+        printWindow.document.close();
+        printWindow.print();
+      }
+    },
+    
+    copyToClipboard: (billData: any) => {
+      const receiptText = formatReceipt(billData);
+      navigator.clipboard.writeText(receiptText).then(() => {
+        toast({
+          title: "Receipt Copied",
+          description: "Receipt text copied to clipboard",
+        });
+      }).catch(() => {
+        toast({
+          title: "Copy Failed",
+          description: "Could not copy receipt to clipboard",
+          variant: "destructive",
+        });
+      });
+    },
+    
+    printToSystemPrinter: (billData: any) => {
+      const receiptText = formatReceipt(billData);
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(`
+          <html>
+            <head>
+              <title>Receipt</title>
+              <style>
+                body { font-family: 'Courier New', monospace; font-size: 12px; }
+                @media print { body { margin: 0; } }
+              </style>
+            </head>
+            <body>
+              <pre>${receiptText}</pre>
+            </body>
+          </html>
+        `);
+        printWindow.document.close();
+        printWindow.print();
+        printWindow.close();
+      }
+    },
+    
+    emailReceipt: (billData: any) => {
+      const receiptText = formatReceipt(billData);
+      const subject = `Receipt - Bill #${billData.billNumber}`;
+      const body = encodeURIComponent(receiptText);
+      window.open(`mailto:?subject=${subject}&body=${body}`);
+    }
+  };
+
   const printReceipt = useCallback(async (billData: any) => {
     if (!connectedPrinter?.characteristic) {
+      // Offer fallback options when no Bluetooth printer
+      const message = compatibility?.isWindows 
+        ? "No Bluetooth printer connected. Use alternative printing methods below."
+        : "Please connect a Bluetooth printer first";
+        
       toast({
         title: "No Printer Connected",
-        description: "Please connect a Bluetooth printer first",
+        description: message,
         variant: "destructive",
       });
       return false;
@@ -218,6 +453,8 @@ export function useBluetoothPrinter() {
     connectPrinter,
     disconnectPrinter,
     printReceipt,
-    isConnected: !!connectedPrinter?.characteristic
+    isConnected: !!connectedPrinter?.characteristic,
+    compatibility,
+    fallbackOptions
   };
 }

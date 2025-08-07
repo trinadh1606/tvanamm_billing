@@ -5,11 +5,12 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Minus, Plus, Trash2, ShoppingCart, CreditCard, Banknote, Bluetooth, BluetoothConnected, Search, X } from 'lucide-react';
+import { Minus, Plus, Trash2, ShoppingCart, CreditCard, Banknote, Bluetooth, BluetoothConnected, Search, X, Settings, HelpCircle } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useBluetoothPrinter } from '@/hooks/useBluetoothPrinter';
+import { WindowsCompatibilityGuide } from '@/components/bluetooth/WindowsCompatibilityGuide';
 
 interface MenuItem {
   id: number;
@@ -33,6 +34,7 @@ export function EnhancedBillingInterface() {
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [showCompatibilityGuide, setShowCompatibilityGuide] = useState(false);
   
   const { franchiseId, user } = useAuth();
   const { toast } = useToast();
@@ -43,7 +45,9 @@ export function EnhancedBillingInterface() {
     connectPrinter, 
     disconnectPrinter, 
     printReceipt, 
-    isConnected 
+    isConnected,
+    compatibility,
+    fallbackOptions
   } = useBluetoothPrinter();
 
   useEffect(() => {
@@ -220,25 +224,46 @@ export function EnhancedBillingInterface() {
               <ShoppingCart className="h-5 w-5" />
               Menu Items
             </CardTitle>
-            <Button
-              variant={isConnected ? "default" : "outline"}
-              size="sm"
-              onClick={isConnected ? disconnectPrinter : connectPrinter}
-              disabled={isConnecting}
-              className="flex items-center gap-2"
-            >
-              {isConnected ? (
-                <>
-                  <BluetoothConnected className="h-4 w-4" />
-                  {connectedPrinter?.name || 'Connected'}
-                </>
-              ) : (
-                <>
-                  <Bluetooth className="h-4 w-4" />
-                  {isConnecting ? 'Connecting...' : 'Connect Printer'}
-                </>
-              )}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant={isConnected ? "default" : "outline"}
+                size="sm"
+                onClick={isConnected ? disconnectPrinter : connectPrinter}
+                disabled={isConnecting}
+                className="flex items-center gap-2"
+              >
+                {isConnected ? (
+                  <>
+                    <BluetoothConnected className="h-4 w-4" />
+                    {connectedPrinter?.name || 'Connected'}
+                  </>
+                ) : (
+                  <>
+                    <Bluetooth className="h-4 w-4" />
+                    {isConnecting ? 'Connecting...' : 'Connect Printer'}
+                  </>
+                )}
+              </Button>
+              
+              <Dialog open={showCompatibilityGuide} onOpenChange={setShowCompatibilityGuide}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Settings className="h-4 w-4" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>Printer Setup & Compatibility</DialogTitle>
+                  </DialogHeader>
+                  {compatibility && (
+                    <WindowsCompatibilityGuide 
+                      compatibility={compatibility}
+                      onClose={() => setShowCompatibilityGuide(false)}
+                    />
+                  )}
+                </DialogContent>
+              </Dialog>
+            </div>
           </div>
           {/* Search Bar */}
           <div className="relative">
@@ -309,7 +334,40 @@ export function EnhancedBillingInterface() {
       {/* Bill Summary */}
       <Card>
         <CardHeader>
-          <CardTitle>Bill Summary</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle>Bill Summary</CardTitle>
+            {!isConnected && billItems.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fallbackOptions?.printToSystemPrinter && fallbackOptions.printToSystemPrinter({
+                    items: billItems,
+                    total: total,
+                    paymentMode: 'N/A',
+                    billNumber: 'Preview',
+                    date: new Date()
+                  })}
+                >
+                  Print Preview
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowCompatibilityGuide(true)}
+                >
+                  <HelpCircle className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+          </div>
+          {compatibility && !compatibility.hasWebBluetooth && (
+            <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
+              <div className="text-yellow-800">
+                Bluetooth printing not available. Use alternative options below.
+              </div>
+            </div>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           {billItems.length === 0 ? (
@@ -391,6 +449,47 @@ export function EnhancedBillingInterface() {
                       {loading && (
                         <div className="text-center text-sm text-muted-foreground">
                           Generating bill...
+                        </div>
+                      )}
+                      
+                      {/* Alternative printing options when no Bluetooth */}
+                      {!isConnected && (
+                        <div className="space-y-2 mt-4 pt-4 border-t">
+                          <div className="text-sm font-medium text-center">Alternative Options:</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const receiptData = {
+                                  items: billItems,
+                                  total: total,
+                                  paymentMode: 'cash',
+                                  billNumber: 'Preview',
+                                  date: new Date()
+                                };
+                                fallbackOptions?.copyToClipboard(receiptData);
+                              }}
+                            >
+                              Copy Text
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const receiptData = {
+                                  items: billItems,
+                                  total: total,
+                                  paymentMode: 'cash',
+                                  billNumber: 'Preview',
+                                  date: new Date()
+                                };
+                                fallbackOptions?.generatePDF(receiptData);
+                              }}
+                            >
+                              Print PDF
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>
