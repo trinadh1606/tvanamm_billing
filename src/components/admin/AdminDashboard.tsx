@@ -5,8 +5,9 @@ import { PredictiveInsights } from '@/components/analytics/PredictiveInsights';
 import { WeeklyPerformanceChart } from '@/components/analytics/WeeklyPerformanceChart';
 import { BillHistory } from '@/components/billing/BillHistory';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-
+import { useAuth } from '@/hooks/useAuth';
 export function AdminDashboard() {
+  const { franchiseId } = useAuth();
   return (
     <DashboardLayout 
       title="Franchise Dashboard" 
@@ -30,7 +31,7 @@ export function AdminDashboard() {
         </TabsContent>
         
         <TabsContent value="weekly">
-          <WeeklyPerformanceChart />
+          <WeeklyPerformanceChart franchiseId={franchiseId} />
         </TabsContent>
         
         <TabsContent value="menu">

@@ -72,12 +72,20 @@ export function HourlySalesChart() {
         });
       });
 
+      // Helper function to convert 24-hour to 12-hour format with AM/PM
+      const formatHour = (hour: number): string => {
+        if (hour === 0) return '12:00 AM';
+        if (hour === 12) return '12:00 PM';
+        if (hour < 12) return `${hour}:00 AM`;
+        return `${hour - 12}:00 PM`;
+      };
+
       // Convert to array format for chart
       const chartData: HourlyData[] = Array.from(hourlyMap.entries()).map(([hour, data]) => ({
         hour: hour.toString().padStart(2, '0'),
         revenue: data.revenue,
         orders: data.orders,
-        displayHour: `${hour.toString().padStart(2, '0')}:00`,
+        displayHour: formatHour(hour),
         isPeakHour: false, // Will be set below
         isCurrentHour: hour === currentHour,
       }));
@@ -103,7 +111,11 @@ export function HourlySalesChart() {
       
       if (peakHoursList.length > 0) {
         const topPeakHour = peakHoursList[0];
-        newInsights.push(`Peak hour: ${topPeakHour.hour}:00 with ₹${topPeakHour.revenue.toFixed(2)} revenue`);
+        const formattedHour = topPeakHour.hour === 0 ? '12:00 AM' : 
+                             topPeakHour.hour === 12 ? '12:00 PM' :
+                             topPeakHour.hour < 12 ? `${topPeakHour.hour}:00 AM` : 
+                             `${topPeakHour.hour - 12}:00 PM`;
+        newInsights.push(`Peak hour: ${formattedHour} with ₹${topPeakHour.revenue.toFixed(2)} revenue`);
       }
       
       if (currentHourData && currentHourData.revenue > 0) {
@@ -157,7 +169,15 @@ export function HourlySalesChart() {
                   <p className="text-sm font-medium text-muted-foreground">
                     {index === 0 ? 'Top Peak Hour' : `Peak Hour #${index + 1}`}
                   </p>
-                  <p className="text-lg font-bold">{peak.hour}:00 - {peak.hour + 1}:00</p>
+                  <p className="text-lg font-bold">
+                    {peak.hour === 0 ? '12:00 AM' : 
+                     peak.hour === 12 ? '12:00 PM' :
+                     peak.hour < 12 ? `${peak.hour}:00 AM` : 
+                     `${peak.hour - 12}:00 PM`} - {peak.hour + 1 === 24 ? '12:00 AM' :
+                     peak.hour + 1 === 12 ? '12:00 PM' :
+                     peak.hour + 1 < 12 ? `${peak.hour + 1}:00 AM` : 
+                     `${peak.hour + 1 - 12}:00 PM`}
+                  </p>
                   <p className="text-sm text-muted-foreground">{peak.orders} orders</p>
                 </div>
                 <div className="text-right">
