@@ -130,25 +130,6 @@ export function FRCentralDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* FR-CENTRAL Header */}
-      <Card className="border-2 border-primary/20">
-        <CardContent className="p-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="p-3 rounded-lg bg-primary/10">
-                <Building2 className="h-8 w-8 text-primary" />
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold">FR-CENTRAL Dashboard</h2>
-                <p className="text-muted-foreground">Central Franchise Performance & Analytics</p>
-              </div>
-            </div>
-            <Badge className={getStatusColor(stats.status)}>
-              {getStatusMessage(stats.status)}
-            </Badge>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Quick Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -172,18 +153,6 @@ export function FRCentralDashboard() {
                 <p className="text-2xl font-bold">{stats.todayOrders}</p>
               </div>
               <Clock className="h-6 w-6 text-primary" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Current Hour</p>
-                <p className="text-2xl font-bold">₹{stats.currentHourRevenue.toFixed(2)}</p>
-              </div>
-              <Zap className="h-6 w-6 text-warning" />
             </div>
           </CardContent>
         </Card>

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Calendar, Download, TrendingUp } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import * as XLSX from 'xlsx';
+import DatePicker from 'react-datepicker';
+import "react-datepicker/dist/react-datepicker.css";
 
 interface DayData {
   day: string;
@@ -24,18 +25,21 @@ interface WeeklyPerformanceProps {
 
 export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: WeeklyPerformanceProps) {
   const [weeklyData, setWeeklyData] = useState<DayData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedFranchise, setSelectedFranchise] = useState<string>(franchiseId || 'FR-CENTRAL');
-  const [franchiseList, setFranchiseList] = useState<string[]>([]);
-  
+  const [loading, setLoading] = useState(false);
+  const [selectedFranchise, setSelectedFranchise] = useState<string>(isCentral ? 'CENTRAL' : '');
+  const [franchiseList, setFranchiseList] = useState<string[]>([]); 
+  // Set default dates to last 7 days
+  const [startDate, setStartDate] = useState<Date | null>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+  const [endDate, setEndDate] = useState<Date | null>(new Date());
   const { toast } = useToast();
 
   useEffect(() => {
     if (isCentral) {
       fetchFranchiseList();
+      // Automatically fetch data for FR-CENTRAL when component mounts
+      fetchWeeklyData();
     }
-    fetchWeeklyData();
-  }, [selectedFranchise]);
+  }, [isCentral]);
 
   const fetchFranchiseList = async () => {
     try {
@@ -45,7 +49,7 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
         .order('franchise_id');
 
       if (error) throw error;
-      
+
       const uniqueFranchises = Array.from(new Set(data?.map(item => item.franchise_id) || []));
       setFranchiseList(uniqueFranchises);
     } catch (error: any) {
@@ -55,55 +59,86 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
 
   const fetchWeeklyData = async () => {
     setLoading(true);
-    
+
     try {
-      // Get last 7 days of data
-      const istNow = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
-      const weekData: DayData[] = [];
-      
-      for (let i = 6; i >= 0; i--) {
-        const date = new Date(istNow);
-        date.setDate(date.getDate() - i);
-        const dateStr = date.toISOString().split('T')[0];
-        const nextDateStr = new Date(date.getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        
-        let query = supabase
-          .from('bills_generated_billing')
-          .select('total')
-          .gte('created_at', dateStr + 'T00:00:00')
-          .lt('created_at', nextDateStr + 'T00:00:00');
-
-        if (!isCentral && selectedFranchise) {
-          query = query.eq('franchise_id', selectedFranchise);
-        } else if (isCentral && selectedFranchise !== 'ALL') {
-          query = query.eq('franchise_id', selectedFranchise);
-        }
-
-        const { data: dayBills, error } = await query;
-        
-        if (error) throw error;
-
-        const revenue = dayBills?.reduce((sum, bill) => sum + Number(bill.total), 0) || 0;
-        const orders = dayBills?.length || 0;
-        const avgOrderValue = orders > 0 ? revenue / orders : 0;
-
-        weekData.push({
-          day: date.toLocaleDateString('en-US', { weekday: 'short' }),
-          date: dateStr,
-          revenue,
-          orders,
-          avgOrderValue,
-          dayOfWeek: date.toLocaleDateString('en-US', { weekday: 'long' }),
-        });
+      if (!startDate || !endDate) {
+        throw new Error("Please select both start and end dates");
       }
 
-      console.log('Weekly Data:', weekData);
-      setWeeklyData(weekData);
-      
+      let queryStartDate = new Date(startDate);
+      let queryEndDate = new Date(endDate);
+
+      // Ensure start date is before end date
+      if (queryStartDate > queryEndDate) {
+        [queryStartDate, queryEndDate] = [queryEndDate, queryStartDate];
+      }
+
+      // Query all data for the date range at once
+      let query = supabase
+        .from('bills_generated_billing')
+        .select('total, created_at, franchise_id')
+        .gte('created_at', queryStartDate.toISOString())
+        .lte('created_at', queryEndDate.toISOString());
+
+      if (selectedFranchise) {
+        query = query.eq('franchise_id', `FR-${selectedFranchise}`);
+      }
+
+      const { data: bills, error } = await query;
+
+      if (error) throw error;
+
+      // Process all bills and group by day
+      const dailyDataMap = new Map<string, DayData>();
+
+      // Initialize all dates in range with zero values
+      const currentDate = new Date(queryStartDate);
+      while (currentDate <= queryEndDate) {
+        const dateKey = formatDate(currentDate);
+        dailyDataMap.set(dateKey, {
+          day: currentDate.toLocaleDateString('en-GB', { weekday: 'short' }),
+          date: dateKey,
+          revenue: 0,
+          orders: 0,
+          avgOrderValue: 0,
+          dayOfWeek: currentDate.toLocaleDateString('en-GB', { weekday: 'long' }),
+        });
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+
+      // Process each bill and add to the corresponding day
+      bills?.forEach(bill => {
+        const billDate = new Date(bill.created_at);
+        const dateKey = formatDate(billDate);
+        
+        const dayData = dailyDataMap.get(dateKey) || {
+          day: billDate.toLocaleDateString('en-GB', { weekday: 'short' }),
+          date: dateKey,
+          revenue: 0,
+          orders: 0,
+          avgOrderValue: 0,
+          dayOfWeek: billDate.toLocaleDateString('en-GB', { weekday: 'long' }),
+        };
+
+        dayData.revenue += Number(bill.total) || 0;
+        dayData.orders += 1;
+        dayData.avgOrderValue = dayData.orders > 0 ? dayData.revenue / dayData.orders : 0;
+        
+        dailyDataMap.set(dateKey, dayData);
+      });
+
+      // Convert map to array and sort by date
+      const filledWeekData = Array.from(dailyDataMap.values()).sort((a, b) => {
+        return new Date(a.date.split('/').reverse().join('-')).getTime() - 
+               new Date(b.date.split('/').reverse().join('-')).getTime();
+      });
+
+      setWeeklyData(filledWeekData);
+
     } catch (error: any) {
       toast({
         title: "Error",
-        description: "Failed to fetch weekly performance data",
+        description: error.message || "Failed to fetch weekly performance data",
         variant: "destructive",
       });
       console.error('Error fetching weekly data:', error);
@@ -112,7 +147,23 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
     }
   };
 
+  const formatDate = (date: Date): string => {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  };
+
   const exportToExcel = () => {
+    if (weeklyData.length === 0) {
+      toast({
+        title: "No Data",
+        description: "There is no data to export",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const exportData = weeklyData.map(day => ({
       'Day': day.dayOfWeek,
       'Date': day.date,
@@ -124,10 +175,10 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Weekly Performance');
-    
-    const filename = `weekly-performance-${selectedFranchise}-${new Date().toISOString().split('T')[0]}.xlsx`;
+
+    const filename = `weekly-performance-${selectedFranchise || 'all'}-${new Date().toISOString().split('T')[0]}.xlsx`;
     XLSX.writeFile(workbook, filename);
-    
+
     toast({
       title: "Export Successful",
       description: "Weekly performance data exported to Excel",
@@ -138,6 +189,10 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
   const totalWeekOrders = weeklyData.reduce((sum, day) => sum + day.orders, 0);
   const avgWeeklyOrderValue = totalWeekOrders > 0 ? totalWeekRevenue / totalWeekOrders : 0;
   const bestDay = weeklyData.reduce((best, day) => day.revenue > best.revenue ? day : best, weeklyData[0] || { revenue: 0, dayOfWeek: 'N/A' });
+
+  const handleGetDetails = () => {
+    fetchWeeklyData();
+  };
 
   if (loading) {
     return <div className="text-center py-8">Loading weekly performance...</div>;
@@ -150,31 +205,65 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Calendar className="h-5 w-5" />
-              <CardTitle>Weekly Performance (Last 7 Days)</CardTitle>
+              <CardTitle>Weekly Performance</CardTitle>
             </div>
             <div className="flex items-center gap-4">
               {isCentral && (
-                <Select value={selectedFranchise} onValueChange={setSelectedFranchise}>
-                  <SelectTrigger className="w-48">
-                    <SelectValue placeholder="Select Franchise" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ALL">All Franchises</SelectItem>
-                    {franchiseList.map(franchise => (
-                      <SelectItem key={franchise} value={franchise}>{franchise}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="relative flex-1 max-w-md">
+                  <input
+                    type="text"
+                    value={selectedFranchise}
+                    onChange={(e) => setSelectedFranchise(e.target.value)}
+                    placeholder="Enter Franchise ID"
+                    className="border p-2 rounded-md w-full"
+                  />
+                </div>
               )}
-              <Button onClick={exportToExcel} variant="outline">
+              <Button onClick={handleGetDetails} variant="outline">
+                Get Data
+              </Button>
+              <Button onClick={exportToExcel} variant="outline" disabled={weeklyData.length === 0}>
                 <Download className="h-4 w-4 mr-2" />
                 Export Excel
               </Button>
             </div>
           </div>
         </CardHeader>
-        
+
         <CardContent>
+          {/* Date Pickers */}
+          <div className="mb-6">
+            <div className="flex items-center gap-4 flex-wrap">
+              <div>
+                <span className="block text-sm font-medium mb-1">Start Date</span>
+                <DatePicker
+                  selected={startDate}
+                  onChange={(date) => setStartDate(date)}
+                  selectsStart
+                  startDate={startDate}
+                  endDate={endDate}
+                  dateFormat="dd/MM/yyyy"
+                  className="border p-2 rounded-md w-full"
+                  placeholderText="Select start date"
+                />
+              </div>
+              <div>
+                <span className="block text-sm font-medium mb-1">End Date</span>
+                <DatePicker
+                  selected={endDate}
+                  onChange={(date) => setEndDate(date)}
+                  selectsEnd
+                  startDate={startDate}
+                  endDate={endDate}
+                  minDate={startDate}
+                  dateFormat="dd/MM/yyyy"
+                  className="border p-2 rounded-md w-full"
+                  placeholderText="Select end date"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* Weekly Summary Stats */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             <Card>
@@ -185,7 +274,7 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
                 </div>
               </CardContent>
             </Card>
-            
+
             <Card>
               <CardContent className="p-4">
                 <div className="text-center">
@@ -194,7 +283,7 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
                 </div>
               </CardContent>
             </Card>
-            
+
             <Card>
               <CardContent className="p-4">
                 <div className="text-center">
@@ -203,63 +292,122 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
                 </div>
               </CardContent>
             </Card>
-            
+
             <Card>
               <CardContent className="p-4">
                 <div className="text-center">
                   <p className="text-sm text-muted-foreground">Best Day</p>
-                  <p className="text-2xl font-bold">{bestDay?.dayOfWeek || 'N/A'}</p>
-                  <p className="text-xs text-muted-foreground">₹{bestDay?.revenue?.toFixed(2) || '0.00'}</p>
+                  <p className="text-2xl font-bold">{bestDay.dayOfWeek}</p>
+                  <p className="text-sm">₹{bestDay.revenue.toFixed(2)}</p>
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Revenue Trend Chart */}
+          {/* Scrollable Daily Revenue Trend */}
           <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              Daily Revenue Trend
-            </h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={weeklyData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="day" />
-                <YAxis />
-                <Tooltip 
-                  formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Revenue']}
-                  labelFormatter={(label) => `Day: ${label}`}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="revenue" 
-                  stroke="hsl(var(--primary))" 
-                  strokeWidth={3}
-                  dot={{ fill: 'hsl(var(--primary))', strokeWidth: 2, r: 6 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <TrendingUp className="h-5 w-5" />
+                Daily Revenue Trend
+              </h3>
+              <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                <span>Swipe right to left</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="9 18 15 12 9 6"></polyline>
+                </svg>
+              </div>
+            </div>
+            <div className="relative">
+              <div className="overflow-x-auto pb-2">
+                <div style={{ minWidth: `${weeklyData.length * 60}px` }}>
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={weeklyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis 
+                          dataKey="date"
+                          tick={{ fontSize: 12 }}
+                          tickFormatter={(value) => {
+                            const date = new Date(value.split('/').reverse().join('-'));
+                            return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value})`;
+                          }}
+                        />
+                        <YAxis />
+                        <Tooltip 
+                          formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Revenue']}
+                          labelFormatter={(value) => {
+                            const date = new Date(value.split('/').reverse().join('-'));
+                            return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                          }}
+                        />
+                        <Line 
+                          type="monotone" 
+                          dataKey="revenue" 
+                          stroke="hsl(var(--primary))" 
+                          strokeWidth={3}
+                          dot={{ fill: 'hsl(var(--primary))', strokeWidth: 2, r: 6 }}
+                          activeDot={{ r: 8 }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+              <div className="absolute bottom-0 left-0 right-0 h-2 bg-gray-100 rounded-full">
+                <div className="h-2 bg-gray-300 rounded-full" style={{ width: '100%' }}></div>
+              </div>
+            </div>
           </div>
 
-          {/* Orders Count Chart */}
-          <div>
-            <h3 className="text-lg font-semibold mb-4">Daily Orders Count</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={weeklyData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="day" />
-                <YAxis />
-                <Tooltip 
-                  formatter={(value: number) => [value, 'Orders']}
-                  labelFormatter={(label) => `Day: ${label}`}
-                />
-                <Bar 
-                  dataKey="orders" 
-                  fill="hsl(var(--secondary))"
-                  radius={[4, 4, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+          {/* Scrollable Orders Count Chart */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Daily Orders Count</h3>
+              <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                <span>Swipe right to left</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="9 18 15 12 9 6"></polyline>
+                </svg>
+              </div>
+            </div>
+            <div className="relative">
+              <div className="overflow-x-auto pb-2">
+                <div style={{ minWidth: `${weeklyData.length * 60}px` }}>
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={weeklyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis 
+                          dataKey="date"
+                          tick={{ fontSize: 12 }}
+                          tickFormatter={(value) => {
+                            const date = new Date(value.split('/').reverse().join('-'));
+                            return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value})`;
+                          }}
+                        />
+                        <YAxis />
+                        <Tooltip 
+                          formatter={(value: number) => [value, 'Orders']}
+                          labelFormatter={(value) => {
+                            const date = new Date(value.split('/').reverse().join('-'));
+                            return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                          }}
+                        />
+                        <Bar 
+                          dataKey="orders" 
+                          fill="hsl(var(--secondary))"
+                          radius={[4, 4, 0, 0]}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+              <div className="absolute bottom-0 left-0 right-0 h-2 bg-gray-100 rounded-full">
+                <div className="h-2 bg-gray-300 rounded-full" style={{ width: '100%' }}></div>
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>

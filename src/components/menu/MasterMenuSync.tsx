@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { RefreshCw, Building2, CheckCircle, AlertCircle, Copy } from 'lucide-react';
+import { RefreshCw, Building2, CheckCircle, AlertCircle, Copy, Search } from 'lucide-react';
 
 interface MenuItem {
   id: number;
@@ -23,14 +23,18 @@ interface MasterMenuSyncProps {
   onOpenChange: (open: boolean) => void;
   sourceItem: MenuItem;
   onSyncComplete: () => void;
+  loggedInFranchiseId: string;
 }
 
-export function MasterMenuSync({ open, onOpenChange, sourceItem, onSyncComplete }: MasterMenuSyncProps) {
+export function MasterMenuSync({ open, onOpenChange, sourceItem, onSyncComplete, loggedInFranchiseId }: MasterMenuSyncProps) {
   const [syncMode, setSyncMode] = useState<'all' | 'selected'>('all');
   const [availableFranchises, setAvailableFranchises] = useState<string[]>([]);
   const [selectedFranchises, setSelectedFranchises] = useState<string[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [syncResults, setSyncResults] = useState<{success: string[], failed: string[]}>({success: [], failed: []});
+  const [searchFranchiseId, setSearchFranchiseId] = useState('');
+  const [searchedMenuItems, setSearchedMenuItems] = useState<MenuItem[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -45,7 +49,7 @@ export function MasterMenuSync({ open, onOpenChange, sourceItem, onSyncComplete 
       const { data, error } = await supabase
         .from('bills_generated_billing')
         .select('franchise_id')
-        .neq('franchise_id', sourceItem.franchise_id);
+        .neq('franchise_id', loggedInFranchiseId);
 
       if (error) throw error;
 
@@ -57,14 +61,78 @@ export function MasterMenuSync({ open, onOpenChange, sourceItem, onSyncComplete 
     }
   };
 
+  const fetchMenuItemsForFranchise = async (franchiseId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('menu_items')
+        .select('*')
+        .eq('franchise_id', franchiseId);
+
+      if (error) throw error;
+
+      return data || [];
+    } catch (error) {
+      console.error('Error fetching menu items:', error);
+      return [];
+    }
+  };
+
+  const handleSearch = async () => {
+    if (!searchFranchiseId) {
+      toast({
+        title: "Error",
+        description: "Please enter a franchise ID",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSearchLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('menu_items')
+        .select('*')
+        .eq('franchise_id', searchFranchiseId);
+
+      if (error) throw error;
+
+      setSearchedMenuItems(data || []);
+      toast({
+        title: "Success",
+        description: `Found ${data?.length || 0} menu items for franchise ${searchFranchiseId}`,
+      });
+    } catch (error) {
+      console.error('Error searching menu items:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch menu items",
+        variant: "destructive",
+      });
+      setSearchedMenuItems([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
   const handleSync = async () => {
     setSyncing(true);
     const targetFranchises = syncMode === 'all' ? availableFranchises : selectedFranchises;
     const results = {success: [] as string[], failed: [] as string[]};
 
     for (const franchiseId of targetFranchises) {
+      if (franchiseId !== loggedInFranchiseId) {
+        console.log(`Skipping sync for franchise ${franchiseId} as it's not the logged-in franchise`);
+        continue;
+      }
+
       try {
-        // Check if item already exists
+        const menuItems = await fetchMenuItemsForFranchise(franchiseId);
+
+        if (menuItems.length === 0) {
+          console.log(`No menu items found for franchise ${franchiseId}`);
+          continue;
+        }
+
         const { data: existingItem } = await supabase
           .from('menu_items')
           .select('id')
@@ -81,7 +149,6 @@ export function MasterMenuSync({ open, onOpenChange, sourceItem, onSyncComplete 
         };
 
         if (existingItem) {
-          // Update existing item
           const { error } = await supabase
             .from('menu_items')
             .update(itemData)
@@ -89,7 +156,6 @@ export function MasterMenuSync({ open, onOpenChange, sourceItem, onSyncComplete 
 
           if (error) throw error;
         } else {
-          // Insert new item
           const { error } = await supabase
             .from('menu_items')
             .insert(itemData);
@@ -143,6 +209,43 @@ export function MasterMenuSync({ open, onOpenChange, sourceItem, onSyncComplete 
         </DialogHeader>
 
         <div className="space-y-6">
+          {/* Search by Franchise ID */}
+          <div className="space-y-3">
+            <Label className="text-sm font-medium">Search Menu Items by Franchise ID</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Enter Franchise ID"
+                value={searchFranchiseId}
+                onChange={(e) => setSearchFranchiseId(e.target.value)}
+              />
+              <Button onClick={handleSearch} disabled={searchLoading}>
+                {searchLoading ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <Search className="h-4 w-4 mr-2" />
+                    Search
+                  </>
+                )}
+              </Button>
+            </div>
+            
+            {searchedMenuItems.length > 0 && (
+              <div className="border rounded-lg p-3 space-y-2 max-h-60 overflow-y-auto">
+                <h4 className="text-sm font-medium">Menu Items for {searchFranchiseId}</h4>
+                {searchedMenuItems.map(item => (
+                  <div key={item.id} className="flex items-center justify-between p-2 border-b">
+                    <div>
+                      <h3 className="font-medium">{item.name}</h3>
+                      <p className="text-sm text-muted-foreground">{item.category}</p>
+                    </div>
+                    <Badge variant="outline">₹{item.price}</Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Source Item Display */}
           <Card>
             <CardHeader>
@@ -213,38 +316,30 @@ export function MasterMenuSync({ open, onOpenChange, sourceItem, onSyncComplete 
           {(syncResults.success.length > 0 || syncResults.failed.length > 0) && (
             <div className="space-y-3">
               <Label className="text-sm font-medium">Sync Results</Label>
-              
-              {syncResults.success.length > 0 && (
-                <div className="p-3 bg-success/10 border border-success/20 rounded-lg">
-                  <div className="flex items-center gap-2 mb-2">
-                    <CheckCircle className="h-4 w-4 text-success" />
-                    <span className="text-sm font-medium text-success">Successfully Synced</span>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="border rounded-lg p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-green-600">
+                    <CheckCircle className="h-4 w-4" />
+                    <span>Successful ({syncResults.success.length})</span>
                   </div>
-                  <div className="flex flex-wrap gap-1">
-                    {syncResults.success.map(franchiseId => (
-                      <Badge key={franchiseId} variant="outline" className="text-success">
-                        {franchiseId}
-                      </Badge>
+                  <div className="max-h-20 overflow-y-auto">
+                    {syncResults.success.map(id => (
+                      <div key={id} className="text-sm">{id}</div>
                     ))}
                   </div>
                 </div>
-              )}
-
-              {syncResults.failed.length > 0 && (
-                <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-                  <div className="flex items-center gap-2 mb-2">
-                    <AlertCircle className="h-4 w-4 text-destructive" />
-                    <span className="text-sm font-medium text-destructive">Failed to Sync</span>
+                <div className="border rounded-lg p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-red-600">
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Failed ({syncResults.failed.length})</span>
                   </div>
-                  <div className="flex flex-wrap gap-1">
-                    {syncResults.failed.map(franchiseId => (
-                      <Badge key={franchiseId} variant="outline" className="text-destructive">
-                        {franchiseId}
-                      </Badge>
+                  <div className="max-h-20 overflow-y-auto">
+                    {syncResults.failed.map(id => (
+                      <div key={id} className="text-sm">{id}</div>
                     ))}
                   </div>
                 </div>
-              )}
+              </div>
             </div>
           )}
 

@@ -7,6 +7,9 @@ import { AuthProvider } from "@/hooks/useAuth";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 
+// Supabase Client Setup
+import { supabase } from "../supabase/supabaseClient"; // Correct relative path
+
 const queryClient = new QueryClient();
 
 const App = () => (

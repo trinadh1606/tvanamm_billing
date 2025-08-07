@@ -5,9 +5,10 @@
     { "path": "./tsconfig.node.json" }
   ],
   "compilerOptions": {
-    "baseUrl": ".",
+    "baseUrl": ".", // Set the base URL to the root of the project
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"], // Already existing alias for the 'src' folder
+      "supabase/*": ["./supabase/*"] // Alias for the 'supabase' folder in the root
     },
     "noImplicitAny": false,
     "noUnusedParameters": false,

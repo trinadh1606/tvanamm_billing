@@ -309,17 +309,6 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
           </CardContent>
         </Card>
 
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Peak Hour</p>
-                <p className="text-2xl font-bold">{stats.peakHour}:00</p>
-              </div>
-              <Clock className="h-6 w-6 text-secondary" />
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Detailed Analytics */}

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Plus, Edit, Trash2, Menu, RefreshCw } from 'lucide-react';
+import { Plus, Edit, Trash2, Menu, RefreshCw, Search } from 'lucide-react';
 import { MasterMenuSync } from './MasterMenuSync';
 
 interface MenuItem {
@@ -36,21 +36,34 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
     category: '',
     franchise_id: '',
   });
+  const [selectedFranchiseId, setSelectedFranchiseId] = useState('');
+  const [availableFranchises, setAvailableFranchises] = useState<string[]>([]);
+  const [fetchingFranchises, setFetchingFranchises] = useState(false);
   
   const { franchiseId, user } = useAuth();
   const { toast } = useToast();
 
   useEffect(() => {
-    fetchMenuItems();
+    if (isCentral) {
+      setSelectedFranchiseId('FR-CENTRAL'); // Default to "FR-CENTRAL" when isCentral is true
+      fetchMenuItems('FR-CENTRAL'); // Load "FR-CENTRAL" menu items by default
+      fetchAvailableFranchises();
+    } else {
+      fetchMenuItems(franchiseId || ''); // Load current franchise items if not central
+    }
   }, [franchiseId, isCentral]);
 
-  const fetchMenuItems = async () => {
+  const fetchMenuItems = async (targetFranchiseId?: string) => {
     setLoading(true);
     
     try {
       let query = supabase.from('menu_items').select('*');
       
-      if (!isCentral && franchiseId) {
+      // Filter by selected franchise
+      const franchiseToFilter = targetFranchiseId || selectedFranchiseId;
+      if (franchiseToFilter) {
+        query = query.eq('franchise_id', franchiseToFilter);
+      } else if (!isCentral && franchiseId) {
         query = query.eq('franchise_id', franchiseId);
       }
       
@@ -66,6 +79,29 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAvailableFranchises = async () => {
+    setFetchingFranchises(true);
+    try {
+      const { data, error } = await supabase
+        .from('bills_generated_billing')
+        .select('franchise_id');
+      
+      if (error) throw error;
+
+      const uniqueFranchises = [...new Set(data?.map(b => b.franchise_id) || [])];
+      setAvailableFranchises(uniqueFranchises);
+    } catch (error) {
+      console.error('Error fetching franchises:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch available franchises",
+        variant: "destructive",
+      });
+    } finally {
+      setFetchingFranchises(false);
     }
   };
 
@@ -109,7 +145,8 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
       setDialogOpen(false);
       setEditingItem(null);
       setFormData({ name: '', price: '', category: '', franchise_id: '' });
-      fetchMenuItems();
+      // Refresh items for the currently selected franchise
+      fetchMenuItems(selectedFranchiseId);
       
     } catch (error: any) {
       toast({
@@ -147,7 +184,8 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
         description: "Menu item deleted successfully",
       });
       
-      fetchMenuItems();
+      // Refresh items for the currently selected franchise
+      fetchMenuItems(selectedFranchiseId);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -160,6 +198,18 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
   const handleSync = (item: MenuItem) => {
     setSyncingItem(item);
     setSyncDialogOpen(true);
+  };
+
+  const handleFetchByFranchise = () => {
+    if (!selectedFranchiseId) {
+      toast({
+        title: "Error",
+        description: "Please select a franchise ID",
+        variant: "destructive",
+      });
+      return;
+    }
+    fetchMenuItems(selectedFranchiseId);
   };
 
   const groupedItems = menuItems.reduce((acc, item) => {
@@ -265,12 +315,53 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
       </CardHeader>
       
       <CardContent>
+        {/* Franchise Selection for Central Users */}
+        {isCentral && (
+          <div className="mb-4 flex gap-2 items-end">
+            <div className="flex-1 space-y-1">
+              <Label>Select Franchise</Label>
+              <Select 
+                value={selectedFranchiseId} 
+                onValueChange={setSelectedFranchiseId}
+                disabled={fetchingFranchises}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={fetchingFranchises ? "Loading franchises..." : "Select a franchise"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableFranchises.map(franchiseId => (
+                    <SelectItem key={franchiseId} value={franchiseId}>
+                      {franchiseId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button 
+              onClick={handleFetchByFranchise} 
+              disabled={!selectedFranchiseId || loading}
+            >
+              <Search className="h-4 w-4 mr-2" />
+              Get Menu
+            </Button>
+          </div>
+        )}
+
         {loading ? (
           <div className="text-center py-8">Loading menu items...</div>
         ) : Object.keys(groupedItems).length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">No menu items found</div>
+          <div className="text-center py-8 text-muted-foreground">
+            {selectedFranchiseId 
+              ? `No menu items found for franchise ${selectedFranchiseId}`
+              : "No menu items found"}
+          </div>
         ) : (
           <div className="space-y-6">
+            {selectedFranchiseId && (
+              <div className="text-sm text-muted-foreground">
+                Showing menu for franchise: <span className="font-medium">{selectedFranchiseId}</span>
+              </div>
+            )}
             {Object.entries(groupedItems).map(([category, items]) => (
               <div key={category}>
                 <h3 className="text-lg font-semibold mb-3 text-primary">{category}</h3>
@@ -313,10 +404,11 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
           onOpenChange={setSyncDialogOpen}
           sourceItem={syncingItem}
           onSyncComplete={() => {
-            fetchMenuItems();
+            fetchMenuItems(selectedFranchiseId);
             setSyncDialogOpen(false);
             setSyncingItem(null);
           }}
+          loggedInFranchiseId={franchiseId || ''}
         />
       )}
     </Card>
