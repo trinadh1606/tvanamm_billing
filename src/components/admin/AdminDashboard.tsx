@@ -18,8 +18,7 @@ export function AdminDashboard() {
       <Tabs defaultValue="analytics" className="w-full">
         <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
-          <TabsTrigger value="insights">AI Insights</TabsTrigger>
-          <TabsTrigger value="weekly">Weekly</TabsTrigger>
+          <TabsTrigger value="insights">Predictions</TabsTrigger>
           <TabsTrigger value="menu">Menu</TabsTrigger>
           <TabsTrigger value="bills">Bills</TabsTrigger>
         </TabsList>
@@ -32,9 +31,7 @@ export function AdminDashboard() {
           <PredictiveInsights />
         </TabsContent>
         
-        <TabsContent value="weekly">
-          <WeeklyPerformanceChart franchiseId={franchiseId} />
-        </TabsContent>
+
         
         <TabsContent value="menu">
           <MenuManager />
