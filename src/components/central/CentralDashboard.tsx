@@ -22,7 +22,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
-import { supabase } from 'supabase/supabaseClient';
+import { supabase } from '@/integrations/supabase/client';
 
 export function CentralDashboard() {
   const [isRegisterDialogOpen, setIsRegisterDialogOpen] = useState(false);
