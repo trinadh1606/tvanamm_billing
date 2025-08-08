@@ -5,10 +5,34 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Minus, Plus, Trash2, ShoppingCart, CreditCard, Banknote, Bluetooth, BluetoothConnected, Search, X, Settings, HelpCircle } from 'lucide-react';
+import {
+  Minus,
+  Plus,
+  Trash2,
+  ShoppingCart,
+  CreditCard,
+  Banknote,
+  Bluetooth,
+  BluetoothConnected,
+  Search,
+  X,
+  Settings,
+  HelpCircle
+} from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
+} from '@/components/ui/dialog';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger
+} from '@/components/ui/tabs';
 import { useBluetoothPrinter } from '@/hooks/useBluetoothPrinter';
 import { WindowsCompatibilityGuide } from '@/components/bluetooth/WindowsCompatibilityGuide';
 
@@ -35,16 +59,16 @@ export function EnhancedBillingInterface() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [showCompatibilityGuide, setShowCompatibilityGuide] = useState(false);
-  
+
   const { franchiseId, user } = useAuth();
   const { toast } = useToast();
-  const { 
-    connectedPrinter, 
-    isConnecting, 
-    isPrinting, 
-    connectPrinter, 
-    disconnectPrinter, 
-    printReceipt, 
+  const {
+    connectedPrinter,
+    isConnecting,
+    isPrinting,
+    connectPrinter,
+    disconnectPrinter,
+    printReceipt,
     isConnected,
     compatibility,
     fallbackOptions
@@ -56,17 +80,17 @@ export function EnhancedBillingInterface() {
 
   const fetchMenuItems = async () => {
     if (!franchiseId) return;
-    
+
     const { data, error } = await supabase
       .from('menu_items')
       .select('*')
       .eq('franchise_id', franchiseId);
-    
+
     if (error) {
       toast({
-        title: "Error",
-        description: "Failed to load menu items",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Failed to load menu items',
+        variant: 'destructive'
       });
     } else {
       setMenuItems(data || []);
@@ -75,7 +99,7 @@ export function EnhancedBillingInterface() {
 
   const addItemToBill = (menuItem: MenuItem) => {
     const existingItem = billItems.find(item => item.menuItemId === menuItem.id);
-    
+
     if (existingItem) {
       updateQuantity(existingItem.id, 1);
     } else {
@@ -84,26 +108,28 @@ export function EnhancedBillingInterface() {
         name: menuItem.name,
         price: menuItem.price,
         quantity: 1,
-        menuItemId: menuItem.id,
+        menuItemId: menuItem.id
       };
       setBillItems([...billItems, newItem]);
     }
 
     toast({
-      title: "Item Added",
-      description: `${menuItem.name} added to cart`,
+      title: 'Item Added',
+      description: `${menuItem.name} added to cart`
     });
   };
 
   const updateQuantity = (id: string, change: number) => {
     setBillItems(items =>
-      items.map(item => {
-        if (item.id === id) {
-          const newQuantity = Math.max(0, item.quantity + change);
-          return newQuantity === 0 ? null : { ...item, quantity: newQuantity };
-        }
-        return item;
-      }).filter(Boolean) as BillItem[]
+      items
+        .map(item => {
+          if (item.id === id) {
+            const newQuantity = Math.max(0, item.quantity + change);
+            return newQuantity === 0 ? null : { ...item, quantity: newQuantity };
+          }
+          return item;
+        })
+        .filter(Boolean) as BillItem[]
     );
   };
 
@@ -111,43 +137,41 @@ export function EnhancedBillingInterface() {
     setBillItems(items => items.filter(item => item.id !== id));
   };
 
-  const total = billItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const total = billItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   const generateBill = async (paymentMode: string) => {
     if (billItems.length === 0) {
       toast({
-        title: "Error",
-        description: "Please add items to the bill",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Please add items to the bill',
+        variant: 'destructive'
       });
       return;
     }
 
     setLoading(true);
-    
+
     try {
-      // Insert bill
       const { data: billData, error: billError } = await supabase
         .from('bills_generated_billing')
         .insert({
           franchise_id: franchiseId,
           mode_payment: paymentMode,
           created_by: user?.id,
-          total: total,
+          total
         })
         .select()
         .single();
 
       if (billError) throw billError;
 
-      // Insert bill items
       const billItemsData = billItems.map(item => ({
         bill_id: billData.id,
         menu_item_id: item.menuItemId || 0,
         qty: item.quantity,
         price: item.price,
         franchise_id: franchiseId,
-        item_name: item.name,
+        item_name: item.name
       }));
 
       const { error: itemsError } = await supabase
@@ -157,62 +181,55 @@ export function EnhancedBillingInterface() {
       if (itemsError) throw itemsError;
 
       toast({
-        title: "Success",
-        description: `Bill generated successfully with ${paymentMode} payment`,
+        title: 'Success',
+        description: `Bill generated successfully with ${paymentMode} payment`
       });
 
-      // Print receipt if printer is connected
       if (isConnected) {
         const receiptData = {
           items: billItems,
-          total: total,
-          paymentMode: paymentMode,
+          total,
+          paymentMode,
           billNumber: billData.id,
           date: billData.created_at || new Date()
         };
         await printReceipt(receiptData);
       }
 
-      // Reset form
       setBillItems([]);
       setPaymentDialogOpen(false);
-
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to generate bill",
-        variant: "destructive",
+        title: 'Error',
+        description: error.message || 'Failed to generate bill',
+        variant: 'destructive'
       });
     } finally {
       setLoading(false);
     }
   };
 
-  // Filter items based on search term
   const filteredItems = useMemo(() => {
     if (!searchTerm) return menuItems;
-    return menuItems.filter(item => 
+    return menuItems.filter(item =>
       item.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [menuItems, searchTerm]);
 
-  // Group filtered items by category
   const groupedMenuItems = useMemo(() => {
     const groups: Record<string, MenuItem[]> = { all: filteredItems };
-    filteredItems.forEach((item) => {
+    filteredItems.forEach(item => {
       const category = item.category || 'Others';
-      if (!groups[category]) {
-        groups[category] = [];
-      }
+      if (!groups[category]) groups[category] = [];
       groups[category].push(item);
     });
     return groups;
   }, [filteredItems]);
 
-  // Get all unique categories
-  const categories = useMemo(() => {
-    return ['all', ...Array.from(new Set(menuItems.map(item => item.category || 'Others'))).sort()];
-  }, [menuItems]);
+  const categories = useMemo(
+    () => ['all', ...Array.from(new Set(menuItems.map(item => item.category || 'Others'))).sort()],
+    [menuItems]
+  );
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

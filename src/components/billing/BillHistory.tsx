@@ -10,7 +10,6 @@ import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import {
   Calendar,
-  Search,
   Download,
   CalendarIcon,
   ArrowUpDown,
@@ -38,7 +37,7 @@ interface BillHistoryProps {
 type SortField = 'created_at' | 'total' | 'franchise_id' | 'id' | 'mode_payment';
 type SortDirection = 'asc' | 'desc';
 
-// ... (imports remain unchanged)
+// ... (All imports stay the same, unchanged)
 
 export function BillHistory({ showAdvanced = false, isCentral = false }: BillHistoryProps) {
   const [bills, setBills] = useState<Bill[]>([]);
@@ -52,6 +51,9 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(50);
+  const [selectedBillId, setSelectedBillId] = useState<number | null>(null);
+  const [billItems, setBillItems] = useState<any[]>([]);
+  const [itemLoading, setItemLoading] = useState(false);
 
   const { franchiseId, role } = useAuth();
   const { toast } = useToast();
@@ -98,6 +100,28 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchBillItems = async (billId: number) => {
+    setItemLoading(true);
+    setSelectedBillId(billId);
+    try {
+      const { data, error } = await supabase
+        .from('bill_items_generated_billing')
+        .select('*')
+        .eq('bill_id', billId);
+
+      if (error) throw error;
+      setBillItems(data || []);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to fetch bill items',
+        variant: 'destructive',
+      });
+    } finally {
+      setItemLoading(false);
     }
   };
 
@@ -181,14 +205,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
   };
 
-  const clearFilters = () => {
-    setSelectedFranchise('ALL');
-    setFromDate(undefined);
-    setToDate(undefined);
-    setSortField('created_at');
-    setSortDirection('desc');
-  };
-
   const totalPages = Math.ceil(filteredBills.length / itemsPerPage);
   const currentBills = filteredBills.slice(
     (currentPage - 1) * itemsPerPage,
@@ -214,60 +230,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           Bill History
           {isCentral && <Badge variant="outline">All Franchises</Badge>}
         </CardTitle>
-
-        {showAdvanced && (
-          <div className="space-y-4 mt-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {isCentral && (
-                <Select value={selectedFranchise} onValueChange={setSelectedFranchise}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select Franchise" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ALL">All Franchises</SelectItem>
-                    {franchiseList.map((franchise) => (
-                      <SelectItem key={franchise} value={franchise}>
-                        {franchise}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className={cn("justify-start text-left font-normal", !fromDate && "text-muted-foreground")}>
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {fromDate ? format(fromDate, 'PPP') : 'From Date'}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-auto p-0">
-                  <CalendarComponent mode="single" selected={fromDate} onSelect={setFromDate} />
-                </PopoverContent>
-              </Popover>
-
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className={cn("justify-start text-left font-normal", !toDate && "text-muted-foreground")}>
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {toDate ? format(toDate, 'PPP') : 'To Date'}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-auto p-0">
-                  <CalendarComponent mode="single" selected={toDate} onSelect={setToDate} />
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <div className="flex gap-2">
-              <Button onClick={exportToExcel} variant="outline">
-                <Download className="h-4 w-4 mr-2" />
-                Export Excel ({filteredBills.length})
-              </Button>
-              <Button onClick={clearFilters} variant="outline">Clear Filters</Button>
-            </div>
-          </div>
-        )}
       </CardHeader>
 
       <CardContent>
@@ -279,33 +241,34 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           <div className="space-y-4">
             <div className={`grid ${gridCols} gap-4 p-4 bg-muted/50 rounded-lg font-medium`}>
               <Button variant="ghost" onClick={() => handleSort('id')} className="justify-start h-auto p-0">
-                Bill ID 
-                <ArrowUpDown className="ml-1 h-3 w-3" />
+                Bill ID <ArrowUpDown className="ml-1 h-3 w-3" />
               </Button>
               {isCentral && (
                 <Button variant="ghost" onClick={() => handleSort('franchise_id')} className="justify-start h-auto p-0">
-                  Franchise
-                  <ArrowUpDown className="ml-1 h-3 w-3" />
+                  Franchise <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
               )}
               <Button variant="ghost" onClick={() => handleSort('mode_payment')} className="justify-start h-auto p-0">
-                Payment Mode
-                <ArrowUpDown className="ml-1 h-3 w-3" />
+                Payment Mode <ArrowUpDown className="ml-1 h-3 w-3" />
               </Button>
               <Button variant="ghost" onClick={() => handleSort('total')} className="justify-start h-auto p-0">
-                Amount
-                <ArrowUpDown className="ml-1 h-3 w-3" />
+                Amount <ArrowUpDown className="ml-1 h-3 w-3" />
               </Button>
               <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0 col-span-2">
-                Date
-                <ArrowUpDown className="ml-1 h-3 w-3" />
+                Date <ArrowUpDown className="ml-1 h-3 w-3" />
               </Button>
             </div>
 
             <div className="space-y-2">
               {currentBills.map((bill) => (
                 <div key={bill.id} className={`grid ${gridCols} gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors`}>
-                  <div className="font-medium">#{bill.id}</div>
+                  <Button
+                    variant="link"
+                    className="p-0 text-left font-medium text-primary underline"
+                    onClick={() => fetchBillItems(bill.id)}
+                  >
+                    #{bill.id}
+                  </Button>
                   {isCentral && (
                     <Badge variant="outline" className="w-fit">{bill.franchise_id}</Badge>
                   )}
@@ -314,8 +277,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                   </div>
                   <div className="font-bold">₹{Number(bill.total).toFixed(2)}</div>
                   <div className="text-sm text-muted-foreground col-span-2">
-                    {new Date(bill.created_at).toLocaleDateString()}
-                    <br />
+                    {new Date(bill.created_at).toLocaleDateString()}<br />
                     <span className="text-xs">{new Date(bill.created_at).toLocaleTimeString()}</span>
                   </div>
                 </div>
@@ -338,6 +300,48 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {selectedBillId !== null && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+            <div className="bg-white p-6 rounded-lg max-w-lg w-full shadow-lg relative">
+              <h2 className="text-xl font-bold mb-2">Items for Bill #{selectedBillId}</h2>
+              <Button
+                className="absolute top-2 right-2"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setSelectedBillId(null);
+                  setBillItems([]);
+                }}
+              >
+                Close
+              </Button>
+
+              {itemLoading ? (
+                <p>Loading items...</p>
+              ) : billItems.length === 0 ? (
+                <p className="text-muted-foreground">No items found for this bill.</p>
+              ) : (
+                <>
+                  <ul className="space-y-2 mt-4 max-h-64 overflow-y-auto">
+                    {billItems.map((item, index) => (
+                      <li key={index} className="border p-2 rounded">
+                        <div className="font-medium">{item.item_name}</div>
+                        <div className="text-sm text-muted-foreground">
+Quantity: {item.qty} | Rate: ₹{item.price} | Total: ₹{(item.qty * item.price).toFixed(2)}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-4 border-t pt-2 font-semibold text-right">
+                    Total Bill Amount: ₹
+{billItems.reduce((acc, item) => acc + Number(item.qty) * Number(item.price), 0).toFixed(2)}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         )}
       </CardContent>

@@ -115,19 +115,18 @@ export function CentralDashboard() {
 
   const themeColor = 'rgb(0, 100, 55)';
   const themeColorLight = 'rgba(0, 100, 55, 0.1)';
-  const themeColorDark = 'rgb(0, 80, 40)';
 
   const titleWithLogo = (
-    <div className="flex items-center gap-3">
-      <img src={logo} alt="Logo" width={80 } height={80} />
+    <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-3 text-center sm:text-left">
+      <img src={logo} alt="Logo" className="w-20 h-20" />
       <span className="text-xl font-bold">CENTRAL DASHBOARD</span>
     </div>
   );
 
   return (
     <DashboardLayout title={titleWithLogo}>
-      <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="grid w-full grid-cols-5" style={{ backgroundColor: themeColorLight }}>
+      <Tabs defaultValue="overview" className="w-full px-2 sm:px-4 py-4">
+        <TabsList className="flex flex-wrap sm:grid sm:grid-cols-5 gap-1 w-full" style={{ backgroundColor: themeColorLight }}>
           <TabsTrigger value="overview" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Overview</TabsTrigger>
           <TabsTrigger value="weekly" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Analysis</TabsTrigger>
           <TabsTrigger value="menu" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Master Menu</TabsTrigger>
@@ -149,89 +148,87 @@ export function CentralDashboard() {
         </TabsContent>
 
         <TabsContent value="settings" className="space-y-4">
-          <Card className="border-[rgb(0,100,55)]">
-            <CardHeader className="flex flex-row items-center space-x-4">
-              <UserPlus className="w-8 h-8" style={{ color: themeColor }} />
-              <div>
-                <CardTitle style={{ color: themeColor }}>Register</CardTitle>
-                <CardDescription>Create a new user account</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">Register new franchise managers or system administrators.</p>
-            </CardContent>
-            <CardFooter>
-              <Button onClick={() => setIsRegisterDialogOpen(true)} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)]">Register User</Button>
-            </CardFooter>
-          </Card>
-
-          <Card className="border-[rgb(0,100,55)]">
-            <CardHeader className="flex flex-row items-center space-x-4">
-              <Key className="w-8 h-8" style={{ color: themeColor }} />
-              <div>
-                <CardTitle style={{ color: themeColor }}>Change Password</CardTitle>
-                <CardDescription>Update your account password</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">Ensure your account is secure by regularly updating your password.</p>
-            </CardContent>
-            <CardFooter>
-              <Button onClick={() => setIsPasswordDialogOpen(true)} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)]">Change Password</Button>
-            </CardFooter>
-          </Card>
-
-          <Card className="border-[rgb(0,100,55)]">
-            <CardHeader className="flex flex-row items-center space-x-4">
-              <Download className="w-8 h-8" style={{ color: themeColor }} />
-              <div>
-                <CardTitle style={{ color: themeColor }}>Download Manual</CardTitle>
-                <CardDescription>Get the complete system documentation</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">Download the latest version of the system manual for reference.</p>
-            </CardContent>
-            <CardFooter>
-              <Button variant="outline" style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)]">
-                <Download className="mr-2 h-4 w-4" style={{ color: themeColor }} />
-                Download PDF
-              </Button>
-            </CardFooter>
-          </Card>
+          {[{
+            icon: UserPlus,
+            title: "Register",
+            description: "Create a new user account",
+            content: "Register new franchise managers or system administrators.",
+            buttonLabel: "Register User",
+            onClick: () => setIsRegisterDialogOpen(true)
+          }, {
+            icon: Key,
+            title: "Change Password",
+            description: "Update your account password",
+            content: "Ensure your account is secure by regularly updating your password.",
+            buttonLabel: "Change Password",
+            onClick: () => setIsPasswordDialogOpen(true)
+          }, {
+            icon: Download,
+            title: "Download Manual",
+            description: "Get the complete system documentation",
+            content: "Download the latest version of the system manual for reference.",
+            buttonLabel: "Download PDF",
+            variant: "outline",
+            iconComponent: <Download className="mr-2 h-4 w-4" style={{ color: themeColor }} />
+          }].map(({ icon: Icon, title, description, content, buttonLabel, onClick, variant = "default", iconComponent }, i) => (
+            <Card key={i} className="border-[rgb(0,100,55)] p-4 sm:p-6">
+              <CardHeader className="flex flex-row items-center space-x-4">
+                <Icon className="w-8 h-8" style={{ color: themeColor }} />
+                <div>
+                  <CardTitle style={{ color: themeColor }}>{title}</CardTitle>
+                  <CardDescription>{description}</CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">{content}</p>
+              </CardContent>
+              <CardFooter>
+                <Button
+                  variant={variant}
+                  style={variant === "outline" ? { borderColor: themeColor, color: themeColor } : { backgroundColor: themeColor }}
+                  className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
+                  onClick={onClick}
+                >
+                  {iconComponent}{buttonLabel}
+                </Button>
+              </CardFooter>
+            </Card>
+          ))}
         </TabsContent>
       </Tabs>
 
+      {/* Register Dialog */}
       <Dialog open={isRegisterDialogOpen} onOpenChange={setIsRegisterDialogOpen}>
-        <DialogContent style={{ borderColor: themeColor }}>
+        <DialogContent className="w-full sm:max-w-md" style={{ borderColor: themeColor }}>
           <DialogHeader>
             <DialogTitle style={{ color: themeColor }}>Register New User</DialogTitle>
             <DialogDescription>Fill in the details to create a new user account.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            {['name', 'email', 'franchiseId', 'password'].map((field) => (
-              <div key={field} className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor={field} className="text-right capitalize">{field === 'franchiseId' ? 'Franchise ID' : field}</Label>
+            {["name", "email", "franchiseId", "password"].map((field) => (
+              <div key={field} className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+                <Label htmlFor={field} className="text-right capitalize sm:col-span-1">{field === 'franchiseId' ? 'Franchise ID' : field}</Label>
                 <Input
                   id={field}
                   type={field === 'password' || field === 'email' ? field : 'text'}
                   value={registerForm[field as keyof typeof registerForm]}
                   onChange={(e) => setRegisterForm({ ...registerForm, [field]: e.target.value })}
-                  className="col-span-3"
+                  className="sm:col-span-3"
                   style={{ borderColor: themeColorLight }}
                 />
               </div>
             ))}
           </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setIsRegisterDialogOpen(false)} style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)]">Cancel</Button>
-            <Button onClick={handleRegister} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)]">Register</Button>
+          <div className="flex flex-col sm:flex-row justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsRegisterDialogOpen(false)} style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)] w-full sm:w-auto">Cancel</Button>
+            <Button onClick={handleRegister} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto">Register</Button>
           </div>
         </DialogContent>
       </Dialog>
 
+      {/* Change Password Dialog */}
       <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
-        <DialogContent style={{ borderColor: themeColor }}>
+        <DialogContent className="w-full sm:max-w-md" style={{ borderColor: themeColor }}>
           <DialogHeader>
             <DialogTitle style={{ color: themeColor }}>Change Password</DialogTitle>
             <DialogDescription>Enter your current password and set a new one.</DialogDescription>
@@ -241,22 +238,22 @@ export function CentralDashboard() {
               { id: 'newPassword', label: 'New Password', value: newPassword, set: setNewPassword },
               { id: 'confirmPassword', label: 'Confirm Password', value: confirmPassword, set: setConfirmPassword }]
               .map(({ id, label, value, set }) => (
-                <div key={id} className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor={id} className="text-right">{label}</Label>
+                <div key={id} className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+                  <Label htmlFor={id} className="text-right sm:col-span-1">{label}</Label>
                   <Input
                     id={id}
                     type="password"
                     value={value}
                     onChange={(e) => set(e.target.value)}
-                    className="col-span-3"
+                    className="sm:col-span-3"
                     style={{ borderColor: themeColorLight }}
                   />
                 </div>
               ))}
           </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setIsPasswordDialogOpen(false)} style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)]">Cancel</Button>
-            <Button onClick={handlePasswordChange} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)]">Change Password</Button>
+          <div className="flex flex-col sm:flex-row justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsPasswordDialogOpen(false)} style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)] w-full sm:w-auto">Cancel</Button>
+            <Button onClick={handlePasswordChange} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto">Change Password</Button>
           </div>
         </DialogContent>
       </Dialog>
