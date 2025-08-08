@@ -2,22 +2,11 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Calendar as CalendarComponent } from '@/components/ui/calendar';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import {
-  Calendar,
-  Download,
-  CalendarIcon,
-  ArrowUpDown,
-  ChevronLeft,
-  ChevronRight,
-} from 'lucide-react';
+import { Calendar, Download, ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
-import { cn } from '@/lib/utils';
 import * as XLSX from 'xlsx';
 
 interface Bill {
@@ -237,53 +226,57 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           <div className="text-center py-8 text-muted-foreground">No bills found</div>
         ) : (
           <div className="space-y-4">
-            <div className={`${gridCols} gap-4 p-4 bg-muted/50 rounded-lg font-medium`}>
-              <Button variant="ghost" onClick={() => handleSort('id')} className="justify-start h-auto p-0">
-                Bill ID <ArrowUpDown className="ml-1 h-3 w-3" />
-              </Button>
-              {isCentral && (
-                <Button variant="ghost" onClick={() => handleSort('franchise_id')} className="justify-start h-auto p-0">
-                  Franchise <ArrowUpDown className="ml-1 h-3 w-3" />
+            <div className="overflow-x-auto w-full">
+              <div className={`${gridCols} gap-4 p-4 bg-muted/50 rounded-lg font-medium min-w-[600px]`}>
+                <Button variant="ghost" onClick={() => handleSort('id')} className="justify-start h-auto p-0">
+                  Bill ID <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
-              )}
-              <Button variant="ghost" onClick={() => handleSort('mode_payment')} className="justify-start h-auto p-0">
-                Payment Mode <ArrowUpDown className="ml-1 h-3 w-3" />
-              </Button>
-              <Button variant="ghost" onClick={() => handleSort('total')} className="justify-start h-auto p-0">
-                Amount <ArrowUpDown className="ml-1 h-3 w-3" />
-              </Button>
-              <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0 sm:col-span-2">
-                Date <ArrowUpDown className="ml-1 h-3 w-3" />
-              </Button>
+                {isCentral && (
+                  <Button variant="ghost" onClick={() => handleSort('franchise_id')} className="justify-start h-auto p-0">
+                    Franchise <ArrowUpDown className="ml-1 h-3 w-3" />
+                  </Button>
+                )}
+                <Button variant="ghost" onClick={() => handleSort('mode_payment')} className="justify-start h-auto p-0">
+                  Payment Mode <ArrowUpDown className="ml-1 h-3 w-3" />
+                </Button>
+                <Button variant="ghost" onClick={() => handleSort('total')} className="justify-start h-auto p-0">
+                  Amount <ArrowUpDown className="ml-1 h-3 w-3" />
+                </Button>
+                <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0 sm:col-span-2">
+                  Date <ArrowUpDown className="ml-1 h-3 w-3" />
+                </Button>
+              </div>
             </div>
 
-            <div className="space-y-2">
-              {currentBills.map((bill) => (
-                <div key={bill.id} className={`${gridCols} gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors text-sm sm:text-base`}>
-                  <div className="break-words min-w-0">
-                    <Button
-                      variant="link"
-                      className="p-0 text-left font-medium text-primary underline"
-                      onClick={() => fetchBillItems(bill.id)}
-                    >
-                      #{bill.id}
-                    </Button>
-                  </div>
-                  {isCentral && (
+            <div className="overflow-x-auto w-full">
+              <div className="space-y-2 min-w-[600px]">
+                {currentBills.map((bill) => (
+                  <div key={bill.id} className={`${gridCols} gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors text-sm sm:text-base`}>
                     <div className="break-words min-w-0">
-                      <Badge variant="outline" className="w-fit">{bill.franchise_id}</Badge>
+                      <Button
+                        variant="link"
+                        className="p-0 text-left font-medium text-primary underline"
+                        onClick={() => fetchBillItems(bill.id)}
+                      >
+                        #{bill.id}
+                      </Button>
                     </div>
-                  )}
-                  <div className="break-words min-w-0">
-                    <Badge variant={getPaymentBadgeVariant(bill.mode_payment)}>{bill.mode_payment?.toUpperCase()}</Badge>
+                    {isCentral && (
+                      <div className="break-words min-w-0">
+                        <Badge variant="outline" className="w-fit">{bill.franchise_id}</Badge>
+                      </div>
+                    )}
+                    <div className="break-words min-w-0">
+                      <Badge variant={getPaymentBadgeVariant(bill.mode_payment)}>{bill.mode_payment?.toUpperCase()}</Badge>
+                    </div>
+                    <div className="font-bold break-words min-w-0">₹{Number(bill.total).toFixed(2)}</div>
+                    <div className="text-sm text-muted-foreground sm:col-span-2 break-words min-w-0">
+                      {new Date(bill.created_at).toLocaleDateString()}<br />
+                      <span className="text-xs">{new Date(bill.created_at).toLocaleTimeString()}</span>
+                    </div>
                   </div>
-                  <div className="font-bold break-words min-w-0">₹{Number(bill.total).toFixed(2)}</div>
-                  <div className="text-sm text-muted-foreground sm:col-span-2 break-words min-w-0">
-                    {new Date(bill.created_at).toLocaleDateString()}<br />
-                    <span className="text-xs">{new Date(bill.created_at).toLocaleTimeString()}</span>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             {totalPages > 1 && (
