@@ -6,8 +6,8 @@ import { Calendar, Download, TrendingUp } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import * as XLSX from 'xlsx';
-import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
+import DatePicker from 'react-datepicker';
 
 interface DayData {
   day: string;
@@ -19,15 +19,15 @@ interface DayData {
 }
 
 interface WeeklyPerformanceProps {
-  userFranchiseId: string; // Required prop - the franchise ID of the logged-in user
-  isCentral: boolean;     // Required prop - whether the user has central access
+  userFranchiseId: string;
+  isCentral: boolean;
 }
 
 export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPerformanceProps) {
   const [weeklyData, setWeeklyData] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedFranchise, setSelectedFranchise] = useState<string>(isCentral ? '' : userFranchiseId);
-  const [franchiseList, setFranchiseList] = useState<string[]>([]); 
+  const [franchiseList, setFranchiseList] = useState<string[]>([]);
   const [startDate, setStartDate] = useState<Date | null>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const [endDate, setEndDate] = useState<Date | null>(new Date());
   const { toast } = useToast();
@@ -40,7 +40,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   }, [isCentral]);
 
   useEffect(() => {
-    // Refetch data when franchise selection or dates change
     fetchWeeklyData();
   }, [selectedFranchise, startDate, endDate]);
 
@@ -76,24 +75,19 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
       let queryStartDate = new Date(startDate);
       let queryEndDate = new Date(endDate);
 
-      // Ensure start date is before end date
       if (queryStartDate > queryEndDate) {
         [queryStartDate, queryEndDate] = [queryEndDate, queryStartDate];
       }
 
-      // Query all data for the date range at once
       let query = supabase
         .from('bills_generated_billing')
         .select('total, created_at, franchise_id')
         .gte('created_at', queryStartDate.toISOString())
         .lte('created_at', queryEndDate.toISOString());
 
-      // Always filter by franchise ID for non-central users
       if (!isCentral) {
         query = query.eq('franchise_id', userFranchiseId);
-      } 
-      // For central users, only filter if a specific franchise is selected
-      else if (selectedFranchise) {
+      } else if (selectedFranchise) {
         query = query.eq('franchise_id', selectedFranchise);
       }
 
@@ -101,11 +95,9 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
 
       if (error) throw error;
 
-      // Process all bills and group by day
       const dailyDataMap = new Map<string, DayData>();
-
-      // Initialize all dates in range with zero values
       const currentDate = new Date(queryStartDate);
+
       while (currentDate <= queryEndDate) {
         const dateKey = formatDate(currentDate);
         dailyDataMap.set(dateKey, {
@@ -119,11 +111,10 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         currentDate.setDate(currentDate.getDate() + 1);
       }
 
-      // Process each bill and add to the corresponding day
       bills?.forEach(bill => {
         const billDate = new Date(bill.created_at);
         const dateKey = formatDate(billDate);
-        
+
         const dayData = dailyDataMap.get(dateKey) || {
           day: billDate.toLocaleDateString('en-GB', { weekday: 'short' }),
           date: dateKey,
@@ -136,18 +127,16 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         dayData.revenue += Number(bill.total) || 0;
         dayData.orders += 1;
         dayData.avgOrderValue = dayData.orders > 0 ? dayData.revenue / dayData.orders : 0;
-        
+
         dailyDataMap.set(dateKey, dayData);
       });
 
-      // Convert map to array and sort by date
       const filledWeekData = Array.from(dailyDataMap.values()).sort((a, b) => {
-        return new Date(a.date.split('/').reverse().join('-')).getTime() - 
-               new Date(b.date.split('/').reverse().join('-')).getTime();
+        return new Date(a.date.split('/').reverse().join('-')).getTime() -
+          new Date(b.date.split('/').reverse().join('-')).getTime();
       });
 
       setWeeklyData(filledWeekData);
-
     } catch (error: any) {
       toast({
         title: "Error",
@@ -256,7 +245,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 <span className="block text-sm font-medium mb-1">Start Date</span>
                 <DatePicker
                   selected={startDate}
-                  onChange={(date) => setStartDate(date)}
+                  onChange={(date: Date | null) => setStartDate(date)}
                   selectsStart
                   startDate={startDate}
                   endDate={endDate}
@@ -269,7 +258,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 <span className="block text-sm font-medium mb-1">End Date</span>
                 <DatePicker
                   selected={endDate}
-                  onChange={(date) => setEndDate(date)}
+                  onChange={(date: Date | null) => setEndDate(date)}
                   selectsEnd
                   startDate={startDate}
                   endDate={endDate}
@@ -292,7 +281,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 </div>
               </CardContent>
             </Card>
-
             <Card>
               <CardContent className="p-4">
                 <div className="text-center">
@@ -301,7 +289,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 </div>
               </CardContent>
             </Card>
-
             <Card>
               <CardContent className="p-4">
                 <div className="text-center">
@@ -310,7 +297,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 </div>
               </CardContent>
             </Card>
-
             <Card>
               <CardContent className="p-4">
                 <div className="text-center">
@@ -322,7 +308,8 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
             </Card>
           </div>
 
-          {/* Scrollable Daily Revenue Trend */}
+          {/* Charts */}
+          {/* Daily Revenue Trend */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -336,49 +323,44 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 </svg>
               </div>
             </div>
-            <div className="relative">
-              <div className="overflow-x-auto pb-2">
-                <div style={{ minWidth: `${weeklyData.length * 60}px` }}>
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={weeklyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis 
-                          dataKey="date"
-                          tick={{ fontSize: 12 }}
-                          tickFormatter={(value) => {
-                            const date = new Date(value.split('/').reverse().join('-'));
-                            return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value})`;
-                          }}
-                        />
-                        <YAxis />
-                        <Tooltip 
-                          formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Revenue']}
-                          labelFormatter={(value) => {
-                            const date = new Date(value.split('/').reverse().join('-'));
-                            return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-                          }}
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey="revenue" 
-                          stroke="hsl(var(--primary))" 
-                          strokeWidth={3}
-                          dot={{ fill: 'hsl(var(--primary))', strokeWidth: 2, r: 6 }}
-                          activeDot={{ r: 8 }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+            <div className="overflow-x-auto pb-2">
+              <div style={{ minWidth: `${weeklyData.length * 60}px` }}>
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={weeklyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => {
+                          const date = new Date(value.split('/').reverse().join('-'));
+                          return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value})`;
+                        }}
+                      />
+                      <YAxis />
+                      <Tooltip
+                        formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Revenue']}
+                        labelFormatter={(value) => {
+                          const date = new Date(value.split('/').reverse().join('-'));
+                          return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                        }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="revenue"
+                        stroke="hsl(var(--primary))"
+                        strokeWidth={3}
+                        dot={{ fill: 'hsl(var(--primary))', strokeWidth: 2, r: 6 }}
+                        activeDot={{ r: 8 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
-              </div>
-              <div className="absolute bottom-0 left-0 right-0 h-2 bg-gray-100 rounded-full">
-                <div className="h-2 bg-gray-300 rounded-full" style={{ width: '100%' }}></div>
               </div>
             </div>
           </div>
 
-          {/* Scrollable Orders Count Chart */}
+          {/* Daily Orders Count */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Daily Orders Count</h3>
@@ -389,41 +371,36 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 </svg>
               </div>
             </div>
-            <div className="relative">
-              <div className="overflow-x-auto pb-2">
-                <div style={{ minWidth: `${weeklyData.length * 60}px` }}>
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={weeklyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis 
-                          dataKey="date"
-                          tick={{ fontSize: 12 }}
-                          tickFormatter={(value) => {
-                            const date = new Date(value.split('/').reverse().join('-'));
-                            return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value})`;
-                          }}
-                        />
-                        <YAxis />
-                        <Tooltip 
-                          formatter={(value: number) => [value, 'Orders']}
-                          labelFormatter={(value) => {
-                            const date = new Date(value.split('/').reverse().join('-'));
-                            return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-                          }}
-                        />
-                        <Bar 
-                          dataKey="orders" 
-                          fill="hsl(var(--secondary))"
-                          radius={[4, 4, 0, 0]}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+            <div className="overflow-x-auto pb-2">
+              <div style={{ minWidth: `${weeklyData.length * 60}px` }}>
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={weeklyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => {
+                          const date = new Date(value.split('/').reverse().join('-'));
+                          return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value})`;
+                        }}
+                      />
+                      <YAxis />
+                      <Tooltip
+                        formatter={(value: number) => [value, 'Orders']}
+                        labelFormatter={(value) => {
+                          const date = new Date(value.split('/').reverse().join('-'));
+                          return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                        }}
+                      />
+                      <Bar
+                        dataKey="orders"
+                        fill="hsl(var(--secondary))"
+                        radius={[4, 4, 0, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-              </div>
-              <div className="absolute bottom-0 left-0 right-0 h-2 bg-gray-100 rounded-full">
-                <div className="h-2 bg-gray-300 rounded-full" style={{ width: '100%' }}></div>
               </div>
             </div>
           </div>
