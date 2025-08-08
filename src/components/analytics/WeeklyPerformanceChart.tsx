@@ -19,16 +19,15 @@ interface DayData {
 }
 
 interface WeeklyPerformanceProps {
-  franchiseId?: string;
-  isCentral?: boolean;
+  userFranchiseId: string; // Required prop - the franchise ID of the logged-in user
+  isCentral: boolean;     // Required prop - whether the user has central access
 }
 
-export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: WeeklyPerformanceProps) {
+export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPerformanceProps) {
   const [weeklyData, setWeeklyData] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedFranchise, setSelectedFranchise] = useState<string>(isCentral ? 'CENTRAL' : '');
+  const [selectedFranchise, setSelectedFranchise] = useState<string>(isCentral ? '' : userFranchiseId);
   const [franchiseList, setFranchiseList] = useState<string[]>([]); 
-  // Set default dates to last 7 days
   const [startDate, setStartDate] = useState<Date | null>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const [endDate, setEndDate] = useState<Date | null>(new Date());
   const { toast } = useToast();
@@ -36,10 +35,14 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
   useEffect(() => {
     if (isCentral) {
       fetchFranchiseList();
-      // Automatically fetch data for FR-CENTRAL when component mounts
-      fetchWeeklyData();
     }
+    fetchWeeklyData();
   }, [isCentral]);
+
+  useEffect(() => {
+    // Refetch data when franchise selection or dates change
+    fetchWeeklyData();
+  }, [selectedFranchise, startDate, endDate]);
 
   const fetchFranchiseList = async () => {
     try {
@@ -54,6 +57,11 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
       setFranchiseList(uniqueFranchises);
     } catch (error: any) {
       console.error('Error fetching franchise list:', error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch franchise list",
+        variant: "destructive",
+      });
     }
   };
 
@@ -80,8 +88,13 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
         .gte('created_at', queryStartDate.toISOString())
         .lte('created_at', queryEndDate.toISOString());
 
-      if (selectedFranchise) {
-        query = query.eq('franchise_id', `FR-${selectedFranchise}`);
+      // Always filter by franchise ID for non-central users
+      if (!isCentral) {
+        query = query.eq('franchise_id', userFranchiseId);
+      } 
+      // For central users, only filter if a specific franchise is selected
+      else if (selectedFranchise) {
+        query = query.eq('franchise_id', selectedFranchise);
       }
 
       const { data: bills, error } = await query;
@@ -210,13 +223,18 @@ export function WeeklyPerformanceChart({ franchiseId, isCentral = false }: Weekl
             <div className="flex items-center gap-4">
               {isCentral && (
                 <div className="relative flex-1 max-w-md">
-                  <input
-                    type="text"
+                  <select
                     value={selectedFranchise}
                     onChange={(e) => setSelectedFranchise(e.target.value)}
-                    placeholder="Enter Franchise ID"
                     className="border p-2 rounded-md w-full"
-                  />
+                  >
+                    <option value="">All Franchises</option>
+                    {franchiseList.map(franchise => (
+                      <option key={franchise} value={franchise}>
+                        {franchise}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               )}
               <Button onClick={handleGetDetails} variant="outline">

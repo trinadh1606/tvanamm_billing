@@ -1,8 +1,9 @@
-// CentralDashboard.tsx
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { FRCentralDashboard } from './FRCentralDashboard';
 import { MenuManager } from '@/components/menu/MenuManager';
 import { BillHistory } from '@/components/billing/BillHistory';
+import logo from '@/assets/logo.png';
+
 import { WeeklyPerformanceChart } from '@/components/analytics/WeeklyPerformanceChart';
 import {
   Tabs, TabsContent, TabsList, TabsTrigger
@@ -62,14 +63,12 @@ export function CentralDashboard() {
 
       const formattedFranchiseId = `FR-${registerForm.franchiseId.replace(/^FR-/, '')}`;
 
-      const { error: insertError } = await supabase.from('profiles').insert([
-        {
-          id: user.id,
-          name: registerForm.name,
-          email: registerForm.email,
-          franchise_id: formattedFranchiseId,
-        },
-      ]);
+      const { error: insertError } = await supabase.from('profiles').insert([{
+        id: user.id,
+        name: registerForm.name,
+        email: registerForm.email,
+        franchise_id: formattedFranchiseId,
+      }]);
 
       if (insertError) {
         toast({ title: "Error", description: insertError.message, variant: "destructive" });
@@ -114,52 +113,33 @@ export function CentralDashboard() {
     }
   };
 
-  // Theme color styles
   const themeColor = 'rgb(0, 100, 55)';
   const themeColorLight = 'rgba(0, 100, 55, 0.1)';
   const themeColorDark = 'rgb(0, 80, 40)';
 
+  const titleWithLogo = (
+    <div className="flex items-center gap-3">
+      <img src={logo} alt="Logo" width={80 } height={80} />
+      <span className="text-xl font-bold">CENTRAL DASHBOARD</span>
+    </div>
+  );
+
   return (
-    <DashboardLayout title="Central Dashboard" description="Multi-Franchise Overview and System Management">
+    <DashboardLayout title={titleWithLogo}>
       <Tabs defaultValue="overview" className="w-full">
         <TabsList className="grid w-full grid-cols-5" style={{ backgroundColor: themeColorLight }}>
-          <TabsTrigger 
-            value="overview"
-            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]"
-          >
-            Overview
-          </TabsTrigger>
-          <TabsTrigger 
-            value="weekly"
-            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]"
-          >
-            Analysis
-          </TabsTrigger>
-          <TabsTrigger 
-            value="menu"
-            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]"
-          >
-            Master Menu
-          </TabsTrigger>
-          <TabsTrigger 
-            value="bills"
-            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]"
-          >
-            All Bills
-          </TabsTrigger>
-          <TabsTrigger 
-            value="settings"
-            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]"
-          >
-            Settings
-          </TabsTrigger>
+          <TabsTrigger value="overview" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Overview</TabsTrigger>
+          <TabsTrigger value="weekly" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Analysis</TabsTrigger>
+          <TabsTrigger value="menu" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Master Menu</TabsTrigger>
+          <TabsTrigger value="bills" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">All Bills</TabsTrigger>
+          <TabsTrigger value="settings" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
           <FRCentralDashboard />
         </TabsContent>
         <TabsContent value="weekly">
-          <WeeklyPerformanceChart isCentral />
+          <WeeklyPerformanceChart isCentral userFranchiseId={''} />
         </TabsContent>
         <TabsContent value="menu">
           <MenuManager isCentral />
@@ -178,18 +158,10 @@ export function CentralDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Register new franchise managers or system administrators.
-              </p>
+              <p className="text-sm text-muted-foreground">Register new franchise managers or system administrators.</p>
             </CardContent>
             <CardFooter>
-              <Button 
-                onClick={() => setIsRegisterDialogOpen(true)}
-                style={{ backgroundColor: themeColor }}
-                className="hover:bg-[rgb(0,80,40)]"
-              >
-                Register User
-              </Button>
+              <Button onClick={() => setIsRegisterDialogOpen(true)} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)]">Register User</Button>
             </CardFooter>
           </Card>
 
@@ -202,18 +174,10 @@ export function CentralDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Ensure your account is secure by regularly updating your password.
-              </p>
+              <p className="text-sm text-muted-foreground">Ensure your account is secure by regularly updating your password.</p>
             </CardContent>
             <CardFooter>
-              <Button 
-                onClick={() => setIsPasswordDialogOpen(true)}
-                style={{ backgroundColor: themeColor }}
-                className="hover:bg-[rgb(0,80,40)]"
-              >
-                Change Password
-              </Button>
+              <Button onClick={() => setIsPasswordDialogOpen(true)} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)]">Change Password</Button>
             </CardFooter>
           </Card>
 
@@ -226,16 +190,10 @@ export function CentralDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Download the latest version of the system manual for reference.
-              </p>
+              <p className="text-sm text-muted-foreground">Download the latest version of the system manual for reference.</p>
             </CardContent>
             <CardFooter>
-              <Button 
-                variant="outline"
-                style={{ borderColor: themeColor, color: themeColor }}
-                className="hover:bg-[rgba(0,100,55,0.1)]"
-              >
+              <Button variant="outline" style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)]">
                 <Download className="mr-2 h-4 w-4" style={{ color: themeColor }} />
                 Download PDF
               </Button>
@@ -248,70 +206,26 @@ export function CentralDashboard() {
         <DialogContent style={{ borderColor: themeColor }}>
           <DialogHeader>
             <DialogTitle style={{ color: themeColor }}>Register New User</DialogTitle>
-            <DialogDescription>
-              Fill in the details to create a new user account.
-            </DialogDescription>
+            <DialogDescription>Fill in the details to create a new user account.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="name" className="text-right">Name</Label>
-              <Input 
-                id="name" 
-                value={registerForm.name} 
-                onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })} 
-                className="col-span-3" 
-                style={{ borderColor: themeColorLight }}
-              />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="email" className="text-right">Email</Label>
-              <Input 
-                id="email" 
-                type="email" 
-                value={registerForm.email} 
-                onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })} 
-                className="col-span-3" 
-                style={{ borderColor: themeColorLight }}
-              />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="franchiseId" className="text-right">Franchise ID</Label>
-              <Input 
-                id="franchiseId" 
-                value={registerForm.franchiseId} 
-                onChange={(e) => setRegisterForm({ ...registerForm, franchiseId: e.target.value })} 
-                className="col-span-3" 
-                style={{ borderColor: themeColorLight }}
-              />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="password" className="text-right">Password</Label>
-              <Input 
-                id="password" 
-                type="password" 
-                value={registerForm.password} 
-                onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })} 
-                className="col-span-3" 
-                style={{ borderColor: themeColorLight }}
-              />
-            </div>
+            {['name', 'email', 'franchiseId', 'password'].map((field) => (
+              <div key={field} className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor={field} className="text-right capitalize">{field === 'franchiseId' ? 'Franchise ID' : field}</Label>
+                <Input
+                  id={field}
+                  type={field === 'password' || field === 'email' ? field : 'text'}
+                  value={registerForm[field as keyof typeof registerForm]}
+                  onChange={(e) => setRegisterForm({ ...registerForm, [field]: e.target.value })}
+                  className="col-span-3"
+                  style={{ borderColor: themeColorLight }}
+                />
+              </div>
+            ))}
           </div>
           <div className="flex justify-end gap-2">
-            <Button 
-              variant="outline" 
-              onClick={() => setIsRegisterDialogOpen(false)}
-              style={{ borderColor: themeColor, color: themeColor }}
-              className="hover:bg-[rgba(0,100,55,0.1)]"
-            >
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleRegister}
-              style={{ backgroundColor: themeColor }}
-              className="hover:bg-[rgb(0,80,40)]"
-            >
-              Register
-            </Button>
+            <Button variant="outline" onClick={() => setIsRegisterDialogOpen(false)} style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)]">Cancel</Button>
+            <Button onClick={handleRegister} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)]">Register</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -320,61 +234,29 @@ export function CentralDashboard() {
         <DialogContent style={{ borderColor: themeColor }}>
           <DialogHeader>
             <DialogTitle style={{ color: themeColor }}>Change Password</DialogTitle>
-            <DialogDescription>
-              Enter your current password and set a new one.
-            </DialogDescription>
+            <DialogDescription>Enter your current password and set a new one.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="oldPassword" className="text-right">Current Password</Label>
-              <Input 
-                id="oldPassword" 
-                type="password" 
-                value={oldPassword} 
-                onChange={(e) => setOldPassword(e.target.value)} 
-                className="col-span-3" 
-                style={{ borderColor: themeColorLight }}
-              />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="newPassword" className="text-right">New Password</Label>
-              <Input 
-                id="newPassword" 
-                type="password" 
-                value={newPassword} 
-                onChange={(e) => setNewPassword(e.target.value)} 
-                className="col-span-3" 
-                style={{ borderColor: themeColorLight }}
-              />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="confirmPassword" className="text-right">Confirm Password</Label>
-              <Input 
-                id="confirmPassword" 
-                type="password" 
-                value={confirmPassword} 
-                onChange={(e) => setConfirmPassword(e.target.value)} 
-                className="col-span-3" 
-                style={{ borderColor: themeColorLight }}
-              />
-            </div>
+            {[{ id: 'oldPassword', label: 'Current Password', value: oldPassword, set: setOldPassword },
+              { id: 'newPassword', label: 'New Password', value: newPassword, set: setNewPassword },
+              { id: 'confirmPassword', label: 'Confirm Password', value: confirmPassword, set: setConfirmPassword }]
+              .map(({ id, label, value, set }) => (
+                <div key={id} className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor={id} className="text-right">{label}</Label>
+                  <Input
+                    id={id}
+                    type="password"
+                    value={value}
+                    onChange={(e) => set(e.target.value)}
+                    className="col-span-3"
+                    style={{ borderColor: themeColorLight }}
+                  />
+                </div>
+              ))}
           </div>
           <div className="flex justify-end gap-2">
-            <Button 
-              variant="outline" 
-              onClick={() => setIsPasswordDialogOpen(false)}
-              style={{ borderColor: themeColor, color: themeColor }}
-              className="hover:bg-[rgba(0,100,55,0.1)]"
-            >
-              Cancel
-            </Button>
-            <Button 
-              onClick={handlePasswordChange}
-              style={{ backgroundColor: themeColor }}
-              className="hover:bg-[rgb(0,80,40)]"
-            >
-              Change Password
-            </Button>
+            <Button variant="outline" onClick={() => setIsPasswordDialogOpen(false)} style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)]">Cancel</Button>
+            <Button onClick={handlePasswordChange} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)]">Change Password</Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -12,8 +12,18 @@ interface BusinessInsight {
   color: string;
 }
 
+interface ItemTrend {
+  item_name: string;
+  slope: number;
+  intercept: number;
+  rSquared: number;
+  totalSold: number;
+  totalRevenue: number;
+}
+
 export function PredictiveInsights() {
   const [insights, setInsights] = useState<BusinessInsight[]>([]);
+  const [itemTrends, setItemTrends] = useState<ItemTrend[]>([]);
   const [loading, setLoading] = useState(true);
   
   const { franchiseId } = useAuth();
@@ -28,33 +38,30 @@ export function PredictiveInsights() {
     setLoading(true);
     
     try {
-      const today = new Date().toISOString().split('T')[0];
+      // Get last 30 days of item data
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
       
-      // Get today's data
-      const { data: todayBills, error: todayError } = await supabase
-        .from('bills_generated_billing')
-        .select('total, created_at')
-        .eq('franchise_id', franchiseId)
-        .gte('created_at', today);
-
-      if (todayError) throw todayError;
-
-      // Get popular items data
-      const { data: itemsData, error: itemsError } = await supabase
+      const { data: itemsData, error } = await supabase
         .from('bill_items_generated_billing')
         .select(`
           item_name, 
           qty,
           price,
-          bills_generated_billing!inner(created_at)
+          created_at,
+          bills_generated_billing!inner(franchise_id)
         `)
-        .eq('franchise_id', franchiseId)
-        .gte('bills_generated_billing.created_at', today);
+        .eq('bills_generated_billing.franchise_id', franchiseId)
+        .gte('created_at', thirtyDaysAgo.toISOString());
 
-      if (itemsError) throw itemsError;
+      if (error) throw error;
 
-      // Generate AI insights
-      const newInsights = generateBusinessInsights(todayBills || [], itemsData || []);
+      // Process data for linear regression
+      const trends = analyzeItemTrends(itemsData || []);
+      setItemTrends(trends);
+      
+      // Generate AI insights based on trends
+      const newInsights = generateBusinessInsights(trends);
       setInsights(newInsights);
       
     } catch (error: any) {
@@ -64,67 +71,152 @@ export function PredictiveInsights() {
     }
   };
 
-  const generateBusinessInsights = (todayBills: any[], itemsData: any[]): BusinessInsight[] => {
-    const insights: BusinessInsight[] = [];
+  // Linear regression implementation
+  const linearRegression = (x: number[], y: number[]) => {
+    const n = x.length;
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
     
-    // Calculate today's revenue and order count
-    const todayRevenue = todayBills.reduce((sum, bill) => sum + Number(bill.total), 0);
-    const todayOrders = todayBills.length;
+    for (let i = 0; i < n; i++) {
+      sumX += x[i];
+      sumY += y[i];
+      sumXY += x[i] * y[i];
+      sumXX += x[i] * x[i];
+    }
     
-    // Get top-selling item
-    const itemMap = new Map<string, { qty: number, revenue: number }>();
-    itemsData.forEach(item => {
-      const existing = itemMap.get(item.item_name) || { qty: 0, revenue: 0 };
-      itemMap.set(item.item_name, {
-        qty: existing.qty + item.qty,
-        revenue: existing.revenue + (item.qty * item.price)
+    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+    
+    // Calculate R-squared
+    let ssTot = 0, ssRes = 0;
+    const meanY = sumY / n;
+    
+    for (let i = 0; i < n; i++) {
+      const fit = slope * x[i] + intercept;
+      ssTot += Math.pow(y[i] - meanY, 2);
+      ssRes += Math.pow(y[i] - fit, 2);
+    }
+    
+    const rSquared = 1 - (ssRes / ssTot);
+    
+    return { slope, intercept, rSquared };
+  };
+
+  const analyzeItemTrends = (items: any[]): ItemTrend[] => {
+    // Group items by name and day
+    const itemMap = new Map<string, {day: number, qty: number, revenue: number}[]>();
+    
+    items.forEach(item => {
+      const date = new Date(item.created_at);
+      // Use day of year as x value (simplified approach)
+      const day = Math.floor(date.getTime() / (1000 * 60 * 60 * 24));
+      
+      if (!itemMap.has(item.item_name)) {
+        itemMap.set(item.item_name, []);
+      }
+      
+      itemMap.get(item.item_name)?.push({
+        day,
+        qty: item.qty,
+        revenue: item.qty * item.price
       });
     });
     
-    const topItem = Array.from(itemMap.entries())
-      .sort((a, b) => b[1].qty - a[1].qty)[0];
+    // Calculate trends for each item
+    const trends: ItemTrend[] = [];
+    
+    itemMap.forEach((dailyData, item_name) => {
+      // Aggregate by day
+      const dayMap = new Map<number, {qty: number, revenue: number}>();
+      
+      dailyData.forEach(data => {
+        if (!dayMap.has(data.day)) {
+          dayMap.set(data.day, { qty: 0, revenue: 0 });
+        }
+        const existing = dayMap.get(data.day)!;
+        dayMap.set(data.day, {
+          qty: existing.qty + data.qty,
+          revenue: existing.revenue + data.revenue
+        });
+      });
+      
+      // Prepare data for regression
+      const days = Array.from(dayMap.keys()).sort();
+      const quantities = days.map(day => dayMap.get(day)!.qty);
+      
+      // Only analyze items with enough data points
+      if (days.length >= 5) {
+        const x = days.map((day, i) => i); // Use sequence numbers as x values
+        const y = quantities;
+        
+        const { slope, intercept, rSquared } = linearRegression(x, y);
+        
+        const totalSold = quantities.reduce((sum, q) => sum + q, 0);
+        const totalRevenue = days.reduce((sum, day) => sum + dayMap.get(day)!.revenue, 0);
+        
+        trends.push({
+          item_name,
+          slope,
+          intercept,
+          rSquared,
+          totalSold,
+          totalRevenue
+        });
+      }
+    });
+    
+    // Sort by strongest positive trend
+    return trends.sort((a, b) => b.slope - a.slope);
+  };
+
+  const generateBusinessInsights = (trends: ItemTrend[]): BusinessInsight[] => {
+    const insights: BusinessInsight[] = [];
+    
+    // Get top trending items
+    const topTrending = trends.filter(t => t.slope > 0 && t.rSquared > 0.5).slice(0, 3);
+    const decliningItems = trends.filter(t => t.slope < -0.5 && t.rSquared > 0.5).slice(0, 3);
     
     // Generate optimization recommendations
-    insights.push({
-      title: "Peak Hour Strategy",
-      content: topItem 
-        ? `Your bestselling item today is ${topItem[0]} with ${topItem[1].qty} units sold. Consider pre-preparing during busy hours.`
-        : "Monitor your peak hours and pre-prepare popular items to reduce wait times.",
-      type: "optimization",
-      icon: "💡",
-      color: "success"
-    });
+    if (topTrending.length > 0) {
+      insights.push({
+        title: "Hot Selling Items",
+        content: `These items are trending up: ${topTrending.map(t => t.item_name).join(', ')}. Consider increasing stock and promoting them.`,
+        type: "optimization",
+        icon: "🔥",
+        color: "success"
+      });
+    }
     
-    insights.push({
-      title: "Inventory Alert", 
-      content: topItem
-        ? `${topItem[0]} is in high demand today. Consider restocking to avoid shortages.`
-        : "Keep track of fast-moving items and maintain adequate stock levels.",
-      type: "optimization",
-      icon: "⚡",
-      color: "warning"
-    });
+    if (decliningItems.length > 0) {
+      insights.push({
+        title: "Declining Items",
+        content: `These items are losing popularity: ${decliningItems.map(t => t.item_name).join(', ')}. Consider promotions or replacements.`,
+        type: "optimization",
+        icon: "📉",
+        color: "warning"
+      });
+    }
     
     // Generate growth opportunities
-    const avgOrderValue = todayOrders > 0 ? todayRevenue / todayOrders : 0;
+    const highValueItems = [...trends]
+      .sort((a, b) => b.totalRevenue - a.totalRevenue)
+      .slice(0, 3);
     
-    insights.push({
-      title: "Revenue Growth",
-      content: todayOrders > 0 
-        ? `Today's average order value is ₹${avgOrderValue.toFixed(2)}. Focus on upselling to increase this metric.`
-        : "Start taking orders to track your performance and identify growth opportunities.",
-      type: "growth", 
-      icon: "📈",
-      color: "primary"
-    });
+    if (highValueItems.length > 0) {
+      insights.push({
+        title: "High Value Items",
+        content: `Your most profitable items: ${highValueItems.map(t => `${t.item_name} (₹${t.totalRevenue.toFixed(2)})`).join(', ')}. Focus on these for maximum revenue.`,
+        type: "growth",
+        icon: "💰",
+        color: "primary"
+      });
+    }
     
+    // General recommendations
     insights.push({
-      title: "Customer Retention",
-      content: todayOrders > 5
-        ? "With multiple orders today, consider implementing a loyalty program to encourage repeat customers."
-        : "Build customer relationships early to establish a loyal customer base.",
+      title: "Menu Optimization",
+      content: "Analyze trends weekly to adjust your menu for maximum profitability.",
       type: "growth",
-      icon: "🎯", 
+      icon: "📊",
       color: "secondary"
     });
     
@@ -132,7 +224,7 @@ export function PredictiveInsights() {
   };
 
   if (loading) {
-    return <div className="text-center py-8">Generating AI insights...</div>;
+    return <div className="text-center py-8">Analyzing item trends...</div>;
   }
 
   return (
@@ -140,7 +232,7 @@ export function PredictiveInsights() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Lightbulb className="h-5 w-5" />
-          AI-Powered Business Insights
+          AI-Powered Menu Insights
         </CardTitle>
       </CardHeader>
       <CardContent>

@@ -25,6 +25,7 @@ interface MenuManagerProps {
 
 export function MenuManager({ isCentral = false }: MenuManagerProps) {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [filteredItems, setFilteredItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
@@ -39,43 +40,64 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
   const [selectedFranchiseId, setSelectedFranchiseId] = useState('');
   const [availableFranchises, setAvailableFranchises] = useState<string[]>([]);
   const [fetchingFranchises, setFetchingFranchises] = useState(false);
-  
+  const [searchQuery, setSearchQuery] = useState('');
+
   const { franchiseId, user } = useAuth();
   const { toast } = useToast();
 
   useEffect(() => {
     if (isCentral) {
-      setSelectedFranchiseId('FR-CENTRAL'); // Default to "FR-CENTRAL" when isCentral is true
-      fetchMenuItems('FR-CENTRAL'); // Load "FR-CENTRAL" menu items by default
+      setSelectedFranchiseId('FR-CENTRAL');
+      fetchMenuItems('FR-CENTRAL');
       fetchAvailableFranchises();
-    } else {
-      fetchMenuItems(franchiseId || ''); // Load current franchise items if not central
+    } else if (franchiseId) {
+      fetchMenuItems(franchiseId);
     }
   }, [franchiseId, isCentral]);
 
+  useEffect(() => {
+    // Filter menu items whenever searchQuery or menuItems change
+    if (searchQuery.trim() === '') {
+      setFilteredItems(menuItems);
+    } else {
+      const query = searchQuery.toLowerCase();
+      const filtered = menuItems.filter(item =>
+        item.name.toLowerCase().includes(query) ||
+        item.category.toLowerCase().includes(query) ||
+        item.price.toString().includes(query)
+      );
+      setFilteredItems(filtered);
+    }
+  }, [searchQuery, menuItems]);
+
   const fetchMenuItems = async (targetFranchiseId?: string) => {
     setLoading(true);
-    
+    setMenuItems([]);
+    setFilteredItems([]);
+
     try {
       let query = supabase.from('menu_items').select('*');
-      
-      // Filter by selected franchise
-      const franchiseToFilter = targetFranchiseId || selectedFranchiseId;
-      if (franchiseToFilter) {
-        query = query.eq('franchise_id', franchiseToFilter);
-      } else if (!isCentral && franchiseId) {
-        query = query.eq('franchise_id', franchiseId);
+
+      let idToUse = '';
+      if (isCentral) {
+        idToUse = targetFranchiseId || selectedFranchiseId || 'FR-CENTRAL';
+      } else {
+        if (!franchiseId) throw new Error('Franchise ID not available');
+        idToUse = franchiseId;
       }
-      
+
+      query = query.eq('franchise_id', idToUse);
+
       const { data, error } = await query.order('category').order('name');
-      
       if (error) throw error;
+
       setMenuItems(data || []);
+      setFilteredItems(data || []);
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: "Failed to fetch menu items",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Failed to fetch menu items',
+        variant: 'destructive',
       });
     } finally {
       setLoading(false);
@@ -88,7 +110,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
       const { data, error } = await supabase
         .from('bills_generated_billing')
         .select('franchise_id');
-      
+
       if (error) throw error;
 
       const uniqueFranchises = [...new Set(data?.map(b => b.franchise_id) || [])];
@@ -96,9 +118,9 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
     } catch (error) {
       console.error('Error fetching franchises:', error);
       toast({
-        title: "Error",
-        description: "Failed to fetch available franchises",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Failed to fetch available franchises',
+        variant: 'destructive',
       });
     } finally {
       setFetchingFranchises(false);
@@ -107,7 +129,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
       const itemData = {
         name: formData.name,
@@ -122,37 +144,41 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
           .from('menu_items')
           .update(itemData)
           .eq('id', editingItem.id);
-        
+
         if (error) throw error;
-        
+
         toast({
-          title: "Success",
-          description: "Menu item updated successfully",
+          title: 'Success',
+          description: 'Menu item updated successfully',
         });
       } else {
         const { error } = await supabase
           .from('menu_items')
           .insert(itemData);
-        
+
         if (error) throw error;
-        
+
         toast({
-          title: "Success",
-          description: "Menu item added successfully",
+          title: 'Success',
+          description: 'Menu item added successfully',
         });
       }
 
       setDialogOpen(false);
       setEditingItem(null);
       setFormData({ name: '', price: '', category: '', franchise_id: '' });
-      // Refresh items for the currently selected franchise
-      fetchMenuItems(selectedFranchiseId);
-      
+
+      if (isCentral) {
+        fetchMenuItems(selectedFranchiseId);
+      } else {
+        fetchMenuItems(franchiseId);
+      }
+
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to save menu item",
-        variant: "destructive",
+        title: 'Error',
+        description: error.message || 'Failed to save menu item',
+        variant: 'destructive',
       });
     }
   };
@@ -170,27 +196,30 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
 
   const handleDelete = async (id: number) => {
     if (!confirm('Are you sure you want to delete this item?')) return;
-    
+
     try {
       const { error } = await supabase
         .from('menu_items')
         .delete()
         .eq('id', id);
-      
+
       if (error) throw error;
-      
+
       toast({
-        title: "Success",
-        description: "Menu item deleted successfully",
+        title: 'Success',
+        description: 'Menu item deleted successfully',
       });
-      
-      // Refresh items for the currently selected franchise
-      fetchMenuItems(selectedFranchiseId);
+
+      if (isCentral) {
+        fetchMenuItems(selectedFranchiseId);
+      } else {
+        fetchMenuItems(franchiseId);
+      }
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: "Failed to delete menu item",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Failed to delete menu item',
+        variant: 'destructive',
       });
     }
   };
@@ -203,16 +232,20 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
   const handleFetchByFranchise = () => {
     if (!selectedFranchiseId) {
       toast({
-        title: "Error",
-        description: "Please select a franchise ID",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Please select a franchise ID',
+        variant: 'destructive',
       });
       return;
     }
     fetchMenuItems(selectedFranchiseId);
   };
 
-  const groupedItems = menuItems.reduce((acc, item) => {
+  const visibleItems = isCentral
+    ? filteredItems
+    : filteredItems.filter(item => item.franchise_id === franchiseId);
+
+  const groupedItems = visibleItems.reduce((acc, item) => {
     if (!acc[item.category]) {
       acc[item.category] = [];
     }
@@ -229,7 +262,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
             Menu Management
             {isCentral && <span className="text-sm text-muted-foreground">(All Franchises)</span>}
           </CardTitle>
-          
+
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -237,14 +270,14 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                 Add Item
               </Button>
             </DialogTrigger>
-            
+
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>
                   {editingItem ? 'Edit Menu Item' : 'Add New Menu Item'}
                 </DialogTitle>
               </DialogHeader>
-              
+
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="name">Item Name</Label>
@@ -255,7 +288,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="price">Price</Label>
                   <Input
@@ -267,7 +300,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                     required
                   />
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="category">Category</Label>
                   <Input
@@ -278,7 +311,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                     required
                   />
                 </div>
-                
+
                 {isCentral && (
                   <div className="space-y-2">
                     <Label htmlFor="franchise">Franchise ID</Label>
@@ -291,14 +324,14 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                     />
                   </div>
                 )}
-                
+
                 <div className="flex gap-2">
                   <Button type="submit" className="flex-1">
                     {editingItem ? 'Update' : 'Add'} Item
                   </Button>
-                  <Button 
-                    type="button" 
-                    variant="outline" 
+                  <Button
+                    type="button"
+                    variant="outline"
                     onClick={() => {
                       setDialogOpen(false);
                       setEditingItem(null);
@@ -313,20 +346,32 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
           </Dialog>
         </div>
       </CardHeader>
-      
+
       <CardContent>
-        {/* Franchise Selection for Central Users */}
+        {/* Search Bar */}
+        <div className="mb-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search menu items..."
+              className="pl-9"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        </div>
+
         {isCentral && (
           <div className="mb-4 flex gap-2 items-end">
             <div className="flex-1 space-y-1">
               <Label>Select Franchise</Label>
-              <Select 
-                value={selectedFranchiseId} 
+              <Select
+                value={selectedFranchiseId}
                 onValueChange={setSelectedFranchiseId}
                 disabled={fetchingFranchises}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={fetchingFranchises ? "Loading franchises..." : "Select a franchise"} />
+                  <SelectValue placeholder={fetchingFranchises ? 'Loading franchises...' : 'Select a franchise'} />
                 </SelectTrigger>
                 <SelectContent>
                   {availableFranchises.map(franchiseId => (
@@ -337,8 +382,8 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                 </SelectContent>
               </Select>
             </div>
-            <Button 
-              onClick={handleFetchByFranchise} 
+            <Button
+              onClick={handleFetchByFranchise}
               disabled={!selectedFranchiseId || loading}
             >
               <Search className="h-4 w-4 mr-2" />
@@ -351,15 +396,20 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
           <div className="text-center py-8">Loading menu items...</div>
         ) : Object.keys(groupedItems).length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
-            {selectedFranchiseId 
-              ? `No menu items found for franchise ${selectedFranchiseId}`
-              : "No menu items found"}
+            {searchQuery.trim() !== ''
+              ? 'No menu items match your search'
+              : isCentral
+                ? `No menu items found for franchise ${selectedFranchiseId}`
+                : 'No menu items found'}
           </div>
         ) : (
           <div className="space-y-6">
-            {selectedFranchiseId && (
+            {isCentral && selectedFranchiseId && (
               <div className="text-sm text-muted-foreground">
                 Showing menu for franchise: <span className="font-medium">{selectedFranchiseId}</span>
+                {searchQuery.trim() !== '' && (
+                  <span> • Filtered by search</span>
+                )}
               </div>
             )}
             {Object.entries(groupedItems).map(([category, items]) => (
@@ -371,7 +421,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                       <div className="flex-1">
                         <div className="font-medium">{item.name}</div>
                         <div className="text-sm text-muted-foreground">
-                          ₹{item.price} 
+                          ₹{item.price}
                           {isCentral && ` • ${item.franchise_id}`}
                         </div>
                       </div>
@@ -397,14 +447,17 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
         )}
       </CardContent>
 
-      {/* Master Menu Sync Dialog */}
       {syncingItem && (
         <MasterMenuSync
           open={syncDialogOpen}
           onOpenChange={setSyncDialogOpen}
           sourceItem={syncingItem}
           onSyncComplete={() => {
-            fetchMenuItems(selectedFranchiseId);
+            if (isCentral) {
+              fetchMenuItems(selectedFranchiseId);
+            } else {
+              fetchMenuItems(franchiseId);
+            }
             setSyncDialogOpen(false);
             setSyncingItem(null);
           }}

@@ -22,6 +22,7 @@ interface CategoryData {
   revenue: number;
   items: number;
   color: string;
+  percentage: number;
 }
 
 export function PopularItemsLive() {
@@ -129,6 +130,7 @@ export function PopularItemsLive() {
 
       // Calculate total for percentages
       const totalQuantity = Array.from(itemMap.values()).reduce((sum, item) => sum + item.quantity, 0);
+      const totalRevenue = Array.from(itemMap.values()).reduce((sum, item) => sum + item.revenue, 0);
 
       // Convert to array and calculate percentages and growth
       const itemsArray: PopularItem[] = Array.from(itemMap.entries())
@@ -172,6 +174,7 @@ export function PopularItemsLive() {
           revenue: data.revenue,
           items: data.items,
           color: colors[index % colors.length],
+          percentage: totalRevenue > 0 ? (data.revenue / totalRevenue) * 100 : 0,
         }))
         .sort((a, b) => b.revenue - a.revenue);
 
@@ -208,88 +211,14 @@ export function PopularItemsLive() {
     }
   };
 
-  const chartConfig = {
-    quantity: {
-      label: "Quantity",
-      color: "hsl(var(--primary))",
-    },
-  };
-
   if (loading) {
     return <div className="text-center py-8">Loading popular items...</div>;
   }
 
   return (
     <div className="space-y-6">
-      {/* Top 3 Items */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {popularItems.slice(0, 3).map((item, index) => (
-          <Card key={item.item_name} className={index === 0 ? 'border-2 border-primary/20' : ''}>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  {index === 0 && <Award className="h-4 w-4 text-warning" />}
-                  <span className="text-sm font-medium text-muted-foreground">
-                    #{index + 1} Bestseller
-                  </span>
-                </div>
-                {item.growth > 0 && (
-                  <Badge variant="outline" className="text-success">
-                    +{item.growth.toFixed(1)}%
-                  </Badge>
-                )}
-              </div>
-              <h3 className="font-bold text-lg mb-1">{item.item_name}</h3>
-              <div className="flex justify-between items-center">
-                <span className="text-2xl font-bold text-primary">{item.total_quantity}</span>
-                <span className="text-sm text-muted-foreground">
-                  ₹{item.total_revenue.toFixed(2)}
-                </span>
-              </div>
-              <Progress value={item.percentage} className="mt-2" />
-              <p className="text-xs text-muted-foreground mt-1">
-                {item.percentage.toFixed(1)}% of total sales
-              </p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Popular Items Chart */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Star className="h-5 w-5" />
-              Top 10 Items Today
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ChartContainer config={chartConfig} className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={popularItems} layout="horizontal">
-                  <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <YAxis 
-                    type="category" 
-                    dataKey="item_name" 
-                    stroke="hsl(var(--muted-foreground))"
-                    fontSize={10}
-                    width={80}
-                    tickFormatter={(value) => value.length > 12 ? value.substring(0, 12) + '...' : value}
-                  />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  <Bar
-                    dataKey="total_quantity"
-                    fill="hsl(var(--primary))"
-                    radius={[0, 4, 4, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartContainer>
-          </CardContent>
-        </Card>
-
         {/* Category Distribution */}
         <Card>
           <CardHeader>
@@ -299,7 +228,7 @@ export function PopularItemsLive() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="h-[300px]">
+            <div className="h-[300px] flex items-center justify-center">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -309,33 +238,16 @@ export function PopularItemsLive() {
                     cx="50%"
                     cy="50%"
                     outerRadius={100}
-                    innerRadius={40}
-                    label={({ category, percentage }) => `${category} ${percentage?.toFixed(1)}%`}
+                    innerRadius={60}
+                    paddingAngle={5}
+                    label={({ percentage }) => `${percentage.toFixed(1)}%`}
                     labelLine={false}
                   >
                     {categoryData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <ChartTooltip 
-                    content={({ active, payload }) => {
-                      if (active && payload && payload.length) {
-                        const data = payload[0].payload as CategoryData;
-                        return (
-                          <div className="bg-card p-3 border rounded-lg shadow-lg">
-                            <p className="font-medium">{data.category}</p>
-                            <p className="text-sm text-muted-foreground">
-                              Revenue: ₹{data.revenue.toFixed(2)}
-                            </p>
-                            <p className="text-sm text-muted-foreground">
-                              Items: {data.items}
-                            </p>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }}
-                  />
+                  <ChartTooltip />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -352,25 +264,47 @@ export function PopularItemsLive() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          {/* Category Legend */}
+          <div className="flex flex-wrap gap-3 mb-4">
+            {categoryData.map((category) => (
+              <div key={category.category} className="flex items-center gap-2">
+                <div 
+                  className="w-4 h-4 rounded-full" 
+                  style={{ backgroundColor: category.color }}
+                />
+                <span className="text-sm">
+                  {category.category} ({category.percentage.toFixed(1)}%)
+                </span>
+              </div>
+            ))}
+          </div>
+          
+          {/* Items List */}
           <div className="space-y-3">
-            {popularItems.map((item, index) => (
-              <div key={item.item_name} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
-                    <span className="text-sm font-bold text-primary">#{index + 1}</span>
-                  </div>
-                  <div>
-                    <span className="font-medium">{item.item_name}</span>
-                    <div className="text-xs text-muted-foreground">
-                      {item.category} • {item.percentage.toFixed(1)}% of sales
+            {popularItems.map((item, index) => {
+              const category = categoryData.find(c => c.category === item.category) || categoryData[0];
+              const categoryColor = category?.color || 'hsl(var(--primary))';
+              
+              return (
+                <div key={item.item_name} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
+                      <span className="text-sm font-bold text-primary">#{index + 1}</span>
+                    </div>
+                    <div>
+                      <span className="font-medium">{item.item_name}</span>
+                      <div className="text-xs text-muted-foreground flex items-center gap-1">
+                        <div 
+                          className="w-2 h-2 rounded-full" 
+                          style={{ backgroundColor: categoryColor }}
+                        />
+                        {item.category} • {item.percentage.toFixed(1)}% of sales
+                      </div>
                     </div>
                   </div>
-                </div>
                   <div className="text-right">
                     <div className="font-bold">{item.total_quantity} sold</div>
-                    <div className="text-sm text-muted-foreground">₹{item.total_revenue.toFixed(2)}</div>
                     <div className="text-xs text-muted-foreground">
-                      Avg: ₹{(item.total_revenue / item.total_quantity).toFixed(2)}/unit
                     </div>
                     {item.growth !== 0 && (
                       <Badge 
@@ -381,33 +315,12 @@ export function PopularItemsLive() {
                       </Badge>
                     )}
                   </div>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         </CardContent>
       </Card>
-
-      {/* Insights */}
-      {insights.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Star className="h-5 w-5" />
-              Sales Insights
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {insights.map((insight, index) => (
-                <div key={index} className="flex items-start gap-2 p-3 bg-muted/50 rounded-lg">
-                  <div className="w-2 h-2 bg-primary rounded-full mt-2"></div>
-                  <span className="text-sm">{insight}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

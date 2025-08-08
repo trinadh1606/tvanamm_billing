@@ -6,8 +6,10 @@ import { WeeklyPerformanceChart } from '@/components/analytics/WeeklyPerformance
 import { BillHistory } from '@/components/billing/BillHistory';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/hooks/useAuth';
+
 export function AdminDashboard() {
   const { franchiseId } = useAuth();
+
   return (
     <DashboardLayout 
       title="Franchise Dashboard" 

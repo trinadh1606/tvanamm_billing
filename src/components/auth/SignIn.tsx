@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
+import logo from '@/assets/logo.png';
 
 export function SignIn() {
   const [storeData, setStoreData] = useState({ franchiseId: '', password: '' });
@@ -77,14 +78,14 @@ export function SignIn() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-subtle">
       <Card className="w-full max-w-md shadow-card">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-            POS System Login
-          </CardTitle>
-          <CardDescription>
-            Access your point of sale dashboard
-          </CardDescription>
-        </CardHeader>
+<CardHeader className="text-center flex flex-col items-center gap-2">
+  <img src={logo} alt="Logo" width={120} height={120} />
+  <CardTitle className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+    T VANAMM
+  </CardTitle>
+  <CardDescription />
+</CardHeader>
+
         <CardContent>
           <Tabs defaultValue="store" className="w-full">
             <TabsList className="grid w-full grid-cols-2">

@@ -221,68 +221,6 @@ export function RealTimeAnalytics() {
         </CardContent>
       </Card>
 
-      {/* Live Metrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Current Hour</p>
-                <p className="text-2xl font-bold">₹{liveStats.currentHourRevenue.toFixed(2)}</p>
-                <p className="text-xs text-muted-foreground">{liveStats.currentHourOrders} orders</p>
-              </div>
-              <div className="p-2 rounded-lg bg-primary/10">
-                <Clock className="h-6 w-6 text-primary" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Today's Revenue</p>
-                <p className="text-2xl font-bold">₹{liveStats.todayRevenue.toFixed(2)}</p>
-                <p className="text-xs text-muted-foreground">{liveStats.todayOrders} orders</p>
-              </div>
-              <div className="p-2 rounded-lg bg-success/10">
-                <DollarSign className="h-6 w-6 text-success" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Avg. Order Value</p>
-                <p className="text-2xl font-bold">₹{liveStats.averageOrderValue.toFixed(2)}</p>
-                <p className="text-xs text-muted-foreground">per order</p>
-              </div>
-              <div className="p-2 rounded-lg bg-secondary/10">
-                <TrendingUp className="h-6 w-6 text-secondary" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Store Status</p>
-                <p className="text-lg font-bold">{liveStats.storeStatus.replace('-', ' ').toUpperCase()}</p>
-                <p className="text-xs text-muted-foreground">Real-time activity</p>
-              </div>
-              <div className="p-2 rounded-lg bg-warning/10">
-                <Zap className="h-6 w-6 text-warning" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
 
       {/* Recent Activity Feed */}
       <Card>

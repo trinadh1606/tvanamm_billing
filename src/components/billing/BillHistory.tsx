@@ -38,6 +38,8 @@ interface BillHistoryProps {
 type SortField = 'created_at' | 'total' | 'franchise_id' | 'id' | 'mode_payment';
 type SortDirection = 'asc' | 'desc';
 
+// ... (imports remain unchanged)
+
 export function BillHistory({ showAdvanced = false, isCentral = false }: BillHistoryProps) {
   const [bills, setBills] = useState<Bill[]>([]);
   const [filteredBills, setFilteredBills] = useState<Bill[]>([]);
@@ -121,17 +123,19 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       let aVal: any = a[sortField];
       let bVal: any = b[sortField];
 
-      if (sortField === 'total') {
+      if (sortField === 'mode_payment') {
+        aVal = aVal?.toLowerCase();
+        bVal = bVal?.toLowerCase();
+      } else if (sortField === 'total') {
         aVal = Number(aVal);
         bVal = Number(bVal);
-      }
-
-      if (sortField === 'created_at') {
+      } else if (sortField === 'created_at') {
         aVal = new Date(aVal).getTime();
         bVal = new Date(bVal).getTime();
       }
 
-      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+      if (aVal === bVal) return 0;
+      return sortDirection === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal < bVal ? 1 : -1);
     });
 
     setFilteredBills(filtered);
@@ -199,6 +203,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       default: return 'outline';
     }
   };
+
+  const gridCols = isCentral ? 'grid-cols-6' : 'grid-cols-5';
 
   return (
     <Card>
@@ -271,30 +277,43 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           <div className="text-center py-8 text-muted-foreground">No bills found</div>
         ) : (
           <div className="space-y-4">
-            {/* Table Header */}
-            <div className="grid grid-cols-6 gap-4 p-4 bg-muted/50 rounded-lg font-medium">
-              <Button variant="ghost" onClick={() => handleSort('id')} className="justify-start h-auto p-0">Bill ID <ArrowUpDown className="ml-1 h-3 w-3" /></Button>
+            <div className={`grid ${gridCols} gap-4 p-4 bg-muted/50 rounded-lg font-medium`}>
+              <Button variant="ghost" onClick={() => handleSort('id')} className="justify-start h-auto p-0">
+                Bill ID 
+                <ArrowUpDown className="ml-1 h-3 w-3" />
+              </Button>
               {isCentral && (
-                <Button variant="ghost" onClick={() => handleSort('franchise_id')} className="justify-start h-auto p-0">Franchise <ArrowUpDown className="ml-1 h-3 w-3" /></Button>
+                <Button variant="ghost" onClick={() => handleSort('franchise_id')} className="justify-start h-auto p-0">
+                  Franchise
+                  <ArrowUpDown className="ml-1 h-3 w-3" />
+                </Button>
               )}
-              <Button variant="ghost" onClick={() => handleSort('mode_payment')} className="justify-start h-auto p-0">Payment Mode <ArrowUpDown className="ml-1 h-3 w-3" /></Button>
-              <Button variant="ghost" onClick={() => handleSort('total')} className="justify-start h-auto p-0">Amount <ArrowUpDown className="ml-1 h-3 w-3" /></Button>
-              <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0">Date <ArrowUpDown className="ml-1 h-3 w-3" /></Button>
+              <Button variant="ghost" onClick={() => handleSort('mode_payment')} className="justify-start h-auto p-0">
+                Payment Mode
+                <ArrowUpDown className="ml-1 h-3 w-3" />
+              </Button>
+              <Button variant="ghost" onClick={() => handleSort('total')} className="justify-start h-auto p-0">
+                Amount
+                <ArrowUpDown className="ml-1 h-3 w-3" />
+              </Button>
+              <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0 col-span-2">
+                Date
+                <ArrowUpDown className="ml-1 h-3 w-3" />
+              </Button>
             </div>
 
-            {/* Table Rows */}
             <div className="space-y-2">
               {currentBills.map((bill) => (
-                <div key={bill.id} className="grid grid-cols-6 gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors">
+                <div key={bill.id} className={`grid ${gridCols} gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors`}>
                   <div className="font-medium">#{bill.id}</div>
                   {isCentral && (
                     <Badge variant="outline" className="w-fit">{bill.franchise_id}</Badge>
                   )}
-                  <div className={isCentral ? '' : 'col-span-2'}>
+                  <div>
                     <Badge variant={getPaymentBadgeVariant(bill.mode_payment)}>{bill.mode_payment?.toUpperCase()}</Badge>
                   </div>
                   <div className="font-bold">₹{Number(bill.total).toFixed(2)}</div>
-                  <div className="text-sm text-muted-foreground">
+                  <div className="text-sm text-muted-foreground col-span-2">
                     {new Date(bill.created_at).toLocaleDateString()}
                     <br />
                     <span className="text-xs">{new Date(bill.created_at).toLocaleTimeString()}</span>
@@ -303,7 +322,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
               ))}
             </div>
 
-            {/* Pagination */}
             {totalPages > 1 && (
               <div className="flex items-center justify-between pt-4">
                 <div className="text-sm text-muted-foreground">

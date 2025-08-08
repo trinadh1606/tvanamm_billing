@@ -141,7 +141,6 @@ export function SalesAnalytics() {
           <TabsTrigger value="realtime">Real-Time</TabsTrigger>
           <TabsTrigger value="hourly">Hourly Trends</TabsTrigger>
           <TabsTrigger value="items">Popular Items</TabsTrigger>
-          <TabsTrigger value="predictions">Predictions</TabsTrigger>
         </TabsList>
         
         <TabsContent value="realtime" className="mt-6">
