@@ -19,7 +19,7 @@ import {
   Settings,
   HelpCircle
 } from 'lucide-react';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import {
   Dialog,
   DialogContent,
@@ -233,7 +233,6 @@ export function EnhancedBillingInterface() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Menu Items by Category */}
       <Card>
         <CardHeader className="pb-4">
           <div className="flex items-center justify-between mb-4">
@@ -261,7 +260,6 @@ export function EnhancedBillingInterface() {
                   </>
                 )}
               </Button>
-              
               <Dialog open={showCompatibilityGuide} onOpenChange={setShowCompatibilityGuide}>
                 <DialogTrigger asChild>
                   <Button variant="outline" size="sm">
@@ -282,7 +280,6 @@ export function EnhancedBillingInterface() {
               </Dialog>
             </div>
           </div>
-          {/* Search Bar */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
             <Input
@@ -304,11 +301,7 @@ export function EnhancedBillingInterface() {
           </div>
         </CardHeader>
         <CardContent>
-          <Tabs 
-            value={selectedCategory} 
-            onValueChange={setSelectedCategory}
-            className="w-full"
-          >
+          <Tabs value={selectedCategory} onValueChange={setSelectedCategory} className="w-full">
             <ScrollArea className="w-full mb-4">
               <TabsList className="inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground w-max">
                 {categories.map((category) => (
@@ -321,12 +314,12 @@ export function EnhancedBillingInterface() {
                   </TabsTrigger>
                 ))}
               </TabsList>
+              <ScrollBar orientation="horizontal" />
             </ScrollArea>
-            
-            <ScrollArea className="h-[500px]">
-              {categories.map(category => (
-                <TabsContent key={category} value={category} className="mt-0">
-                  <div className="grid grid-cols-2 gap-3">
+            {categories.map(category => (
+              <TabsContent key={category} value={category} className="mt-0">
+                <ScrollArea className="h-[500px]">
+                  <div className="grid grid-cols-2 gap-3 pr-2">
                     {groupedMenuItems[category]?.map(item => (
                       <Button
                         key={item.id}
@@ -341,12 +334,15 @@ export function EnhancedBillingInterface() {
                       </Button>
                     ))}
                   </div>
-                </TabsContent>
-              ))}
-            </ScrollArea>
+                  <ScrollBar orientation="vertical" />
+                </ScrollArea>
+              </TabsContent>
+            ))}
           </Tabs>
         </CardContent>
       </Card>
+
+   
 
       {/* Bill Summary */}
       <Card>
