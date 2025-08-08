@@ -37,8 +37,6 @@ interface BillHistoryProps {
 type SortField = 'created_at' | 'total' | 'franchise_id' | 'id' | 'mode_payment';
 type SortDirection = 'asc' | 'desc';
 
-// ... (All imports stay the same, unchanged)
-
 export function BillHistory({ showAdvanced = false, isCentral = false }: BillHistoryProps) {
   const [bills, setBills] = useState<Bill[]>([]);
   const [filteredBills, setFilteredBills] = useState<Bill[]>([]);
@@ -220,7 +218,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
   };
 
-  const gridCols = isCentral ? 'grid-cols-6' : 'grid-cols-5';
+  const gridCols = isCentral ? 'grid grid-cols-1 sm:grid-cols-6' : 'grid grid-cols-1 sm:grid-cols-5';
 
   return (
     <Card>
@@ -239,7 +237,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           <div className="text-center py-8 text-muted-foreground">No bills found</div>
         ) : (
           <div className="space-y-4">
-            <div className={`grid ${gridCols} gap-4 p-4 bg-muted/50 rounded-lg font-medium`}>
+            <div className={`${gridCols} gap-4 p-4 bg-muted/50 rounded-lg font-medium`}>
               <Button variant="ghost" onClick={() => handleSort('id')} className="justify-start h-auto p-0">
                 Bill ID <ArrowUpDown className="ml-1 h-3 w-3" />
               </Button>
@@ -254,29 +252,33 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
               <Button variant="ghost" onClick={() => handleSort('total')} className="justify-start h-auto p-0">
                 Amount <ArrowUpDown className="ml-1 h-3 w-3" />
               </Button>
-              <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0 col-span-2">
+              <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0 sm:col-span-2">
                 Date <ArrowUpDown className="ml-1 h-3 w-3" />
               </Button>
             </div>
 
             <div className="space-y-2">
               {currentBills.map((bill) => (
-                <div key={bill.id} className={`grid ${gridCols} gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors`}>
-                  <Button
-                    variant="link"
-                    className="p-0 text-left font-medium text-primary underline"
-                    onClick={() => fetchBillItems(bill.id)}
-                  >
-                    #{bill.id}
-                  </Button>
+                <div key={bill.id} className={`${gridCols} gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors text-sm sm:text-base`}>
+                  <div className="break-words min-w-0">
+                    <Button
+                      variant="link"
+                      className="p-0 text-left font-medium text-primary underline"
+                      onClick={() => fetchBillItems(bill.id)}
+                    >
+                      #{bill.id}
+                    </Button>
+                  </div>
                   {isCentral && (
-                    <Badge variant="outline" className="w-fit">{bill.franchise_id}</Badge>
+                    <div className="break-words min-w-0">
+                      <Badge variant="outline" className="w-fit">{bill.franchise_id}</Badge>
+                    </div>
                   )}
-                  <div>
+                  <div className="break-words min-w-0">
                     <Badge variant={getPaymentBadgeVariant(bill.mode_payment)}>{bill.mode_payment?.toUpperCase()}</Badge>
                   </div>
-                  <div className="font-bold">₹{Number(bill.total).toFixed(2)}</div>
-                  <div className="text-sm text-muted-foreground col-span-2">
+                  <div className="font-bold break-words min-w-0">₹{Number(bill.total).toFixed(2)}</div>
+                  <div className="text-sm text-muted-foreground sm:col-span-2 break-words min-w-0">
                     {new Date(bill.created_at).toLocaleDateString()}<br />
                     <span className="text-xs">{new Date(bill.created_at).toLocaleTimeString()}</span>
                   </div>
@@ -330,14 +332,13 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                       <li key={index} className="border p-2 rounded">
                         <div className="font-medium">{item.item_name}</div>
                         <div className="text-sm text-muted-foreground">
-Quantity: {item.qty} | Rate: ₹{item.price} | Total: ₹{(item.qty * item.price).toFixed(2)}
+                          Quantity: {item.qty} | Rate: ₹{item.price} | Total: ₹{(item.qty * item.price).toFixed(2)}
                         </div>
                       </li>
                     ))}
                   </ul>
                   <div className="mt-4 border-t pt-2 font-semibold text-right">
-                    Total Bill Amount: ₹
-{billItems.reduce((acc, item) => acc + Number(item.qty) * Number(item.price), 0).toFixed(2)}
+                    Total Bill Amount: ₹{billItems.reduce((acc, item) => acc + Number(item.qty) * Number(item.price), 0).toFixed(2)}
                   </div>
                 </>
               )}
