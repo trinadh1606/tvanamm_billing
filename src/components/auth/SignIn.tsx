@@ -19,22 +19,16 @@ export function SignIn() {
     e.preventDefault();
     setLoading(true);
     
-    // Normalize franchise ID input (ensure fr- prefix, convert to lowercase)
     let normalizedId = storeData.franchiseId.toLowerCase().trim();
     if (!normalizedId.startsWith('fr-')) {
       normalizedId = `fr-${normalizedId}`;
     }
     
-    // Construct email with normalized franchise ID (keeping fr- prefix)
     const email = `store.${normalizedId}@yourdomain.com`;
-    console.log('Store Login - Attempting login with email:', email);
-    console.log('Store Login - Original input:', storeData.franchiseId);
-    console.log('Store Login - Normalized ID:', normalizedId);
     
     const { error } = await signIn(email, storeData.password);
     
     if (error) {
-      console.error('Store login error:', error);
       toast({
         title: "Login Failed", 
         description: error.message || "Invalid credentials. Please check your franchise ID and password.",
@@ -48,24 +42,17 @@ export function SignIn() {
     e.preventDefault();
     setLoading(true);
     
-    // Normalize franchise ID input (ensure fr- prefix, convert to lowercase)
     let normalizedId = adminData.franchiseId.toLowerCase().trim();
     if (!normalizedId.startsWith('fr-')) {
       normalizedId = `fr-${normalizedId}`;
     }
     
-    // Split email to get username and domain parts
     const [username, domain] = adminData.email.split('@');
-    // Construct email with "fr-" prefix to match database format
     const email = `${username}+${normalizedId}@${domain}`;
-    console.log('Admin Login - Attempting login with email:', email);
-    console.log('Admin Login - Original franchise ID input:', adminData.franchiseId);
-    console.log('Admin Login - Normalized ID:', normalizedId);
     
     const { error } = await signIn(email, adminData.password);
     
     if (error) {
-      console.error('Admin login error:', error);
       toast({
         title: "Login Failed",
         description: error.message || "Invalid credentials. Please check your email, franchise ID and password.",
@@ -76,37 +63,48 @@ export function SignIn() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-subtle">
-      <Card className="w-full max-w-md shadow-card">
-<CardHeader className="text-center flex flex-col items-center gap-2">
-  <img src={logo} alt="Logo" width={120} height={120} />
-  <CardTitle className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-    T VANAMM
-  </CardTitle>
-  <CardDescription />
-</CardHeader>
+    <div className="min-h-screen flex items-center justify-center bg-white">
+      <Card className="w-full max-w-md shadow-sm border border-gray-200">
+        <CardHeader className="text-center flex flex-col items-center gap-2">
+          <img src={logo} alt="Logo" width={120} height={120} />
+          <CardTitle className="text-2xl font-bold" style={{ color: 'rgb(0, 100, 55)' }}>
+            T VANAMM
+          </CardTitle>
+          <CardDescription />
+        </CardHeader>
 
         <CardContent>
           <Tabs defaultValue="store" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="store">Store Login</TabsTrigger>
-              <TabsTrigger value="admin">Admin Login</TabsTrigger>
-            </TabsList>
+            <TabsList className="grid w-full grid-cols-2 bg-white">
+  <TabsTrigger 
+    value="store" 
+    className="data-[state=active]:bg-[rgb(0,100,55)] data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-[rgb(0,100,55)]"
+  >
+    Store Login
+  </TabsTrigger>
+  <TabsTrigger 
+    value="admin" 
+    className="data-[state=active]:bg-[rgb(0,100,55)] data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-[rgb(0,100,55)]"
+  >
+    Admin Login
+  </TabsTrigger>
+</TabsList>
             
             <TabsContent value="store">
               <form onSubmit={handleStoreLogin} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="store-franchise">Franchise ID</Label>
+                  <Label htmlFor="store-franchise" className="text-gray-700">Franchise ID</Label>
                   <Input
                     id="store-franchise"
                     placeholder="Enter franchise ID"
                     value={storeData.franchiseId}
                     onChange={(e) => setStoreData({ ...storeData, franchiseId: e.target.value })}
                     required
+                    className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)]"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="store-password">Password</Label>
+                  <Label htmlFor="store-password" className="text-gray-700">Password</Label>
                   <Input
                     id="store-password"
                     type="password"
@@ -114,9 +112,14 @@ export function SignIn() {
                     value={storeData.password}
                     onChange={(e) => setStoreData({ ...storeData, password: e.target.value })}
                     required
+                    className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)]"
                   />
                 </div>
-                <Button type="submit" className="w-full" disabled={loading}>
+                <Button 
+                  type="submit" 
+                  className="w-full bg-[rgb(0,100,55)] hover:bg-[rgb(0,80,45)] text-white" 
+                  disabled={loading}
+                >
                   {loading ? 'Signing in...' : 'Sign In to Store'}
                 </Button>
               </form>
@@ -125,17 +128,18 @@ export function SignIn() {
             <TabsContent value="admin">
               <form onSubmit={handleAdminLogin} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="admin-franchise">Franchise ID</Label>
+                  <Label htmlFor="admin-franchise" className="text-gray-700">Franchise ID</Label>
                   <Input
                     id="admin-franchise"
                     placeholder="Enter franchise ID"
                     value={adminData.franchiseId}
                     onChange={(e) => setAdminData({ ...adminData, franchiseId: e.target.value })}
                     required
+                    className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)]"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="admin-email">Email</Label>
+                  <Label htmlFor="admin-email" className="text-gray-700">Email</Label>
                   <Input
                     id="admin-email"
                     type="email"
@@ -143,10 +147,11 @@ export function SignIn() {
                     value={adminData.email}
                     onChange={(e) => setAdminData({ ...adminData, email: e.target.value })}
                     required
+                    className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)]"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="admin-password">Password</Label>
+                  <Label htmlFor="admin-password" className="text-gray-700">Password</Label>
                   <Input
                     id="admin-password"
                     type="password"
@@ -154,9 +159,14 @@ export function SignIn() {
                     value={adminData.password}
                     onChange={(e) => setAdminData({ ...adminData, password: e.target.value })}
                     required
+                    className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)]"
                   />
                 </div>
-                <Button type="submit" className="w-full" disabled={loading}>
+                <Button 
+                  type="submit" 
+                  className="w-full bg-[rgb(0,100,55)] hover:bg-[rgb(0,80,45)] text-white" 
+                  disabled={loading}
+                >
                   {loading ? 'Signing in...' : 'Sign In to Admin'}
                 </Button>
               </form>
