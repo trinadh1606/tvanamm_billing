@@ -66,7 +66,7 @@ export function SignIn() {
     <div className="min-h-screen flex items-center justify-center bg-white">
       <Card className="w-full max-w-md shadow-sm border border-gray-200">
         <CardHeader className="text-center flex flex-col items-center gap-2">
-          <img src={logo} alt="Logo" width={120} height={120} />
+          <img src={logo} alt="Logo" width={150} height={150} />
           <CardTitle className="text-2xl font-bold" style={{ color: 'rgb(0, 100, 55)' }}>
             T VANAMM
           </CardTitle>
@@ -76,19 +76,19 @@ export function SignIn() {
         <CardContent>
           <Tabs defaultValue="store" className="w-full">
             <TabsList className="grid w-full grid-cols-2 bg-white">
-  <TabsTrigger 
-    value="store" 
-    className="data-[state=active]:bg-[rgb(0,100,55)] data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-[rgb(0,100,55)]"
-  >
-    Store Login
-  </TabsTrigger>
-  <TabsTrigger 
-    value="admin" 
-    className="data-[state=active]:bg-[rgb(0,100,55)] data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-[rgb(0,100,55)]"
-  >
-    Admin Login
-  </TabsTrigger>
-</TabsList>
+              <TabsTrigger 
+                value="store" 
+                className="data-[state=active]:bg-[rgb(0,100,55)] data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-[rgb(0,100,55)]"
+              >
+                Store Login
+              </TabsTrigger>
+              <TabsTrigger 
+                value="admin" 
+                className="data-[state=active]:bg-[rgb(0,100,55)] data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-[rgb(0,100,55)]"
+              >
+                Admin Login
+              </TabsTrigger>
+            </TabsList>
             
             <TabsContent value="store">
               <form onSubmit={handleStoreLogin} className="space-y-4">
@@ -117,7 +117,7 @@ export function SignIn() {
                 </div>
                 <Button 
                   type="submit" 
-                  className="w-full bg-[rgb(0,100,55)] hover:bg-[rgb(0,80,45)] text-white" 
+                  className="w-full bg-[rgb(0,100,55)] hover:bg-[rgb(0,80,45)] text-white shadow-md hover:shadow-lg transition-shadow" 
                   disabled={loading}
                 >
                   {loading ? 'Signing in...' : 'Sign In to Store'}
@@ -164,7 +164,7 @@ export function SignIn() {
                 </div>
                 <Button 
                   type="submit" 
-                  className="w-full bg-[rgb(0,100,55)] hover:bg-[rgb(0,80,45)] text-white" 
+                  className="w-full bg-[rgb(0,100,55)] hover:bg-[rgb(0,80,45)] text-white shadow-md hover:shadow-lg transition-shadow" 
                   disabled={loading}
                 >
                   {loading ? 'Signing in...' : 'Sign In to Admin'}

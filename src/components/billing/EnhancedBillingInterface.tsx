@@ -210,21 +210,45 @@ export function EnhancedBillingInterface() {
   };
 
   const filteredItems = useMemo(() => {
-    if (!searchTerm) return menuItems;
-    return menuItems.filter(item =>
-      item.name.toLowerCase().includes(searchTerm.toLowerCase())
+    // If searching, ignore category filter
+    if (searchTerm.trim()) {
+      return menuItems.filter(item =>
+        item.name.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    // If no search, apply category filter
+    if (selectedCategory === 'all') return menuItems;
+
+    return menuItems.filter(
+      item =>
+        item.category === selectedCategory ||
+        (!item.category && selectedCategory === 'Others')
     );
-  }, [menuItems, searchTerm]);
+  }, [menuItems, searchTerm, selectedCategory]);
 
   const groupedMenuItems = useMemo(() => {
-    const groups: Record<string, MenuItem[]> = { all: filteredItems };
+    // When searching, put everything in "all"
+    if (searchTerm.trim()) {
+      return { all: filteredItems };
+    }
+
+    // Group by category when not searching
+    const groups: Record<string, MenuItem[]> = {};
     filteredItems.forEach(item => {
       const category = item.category || 'Others';
       if (!groups[category]) groups[category] = [];
       groups[category].push(item);
     });
+
     return groups;
-  }, [filteredItems]);
+  }, [filteredItems, searchTerm]);
+
+  useEffect(() => {
+    if (searchTerm.trim()) {
+      setSelectedCategory('all');
+    }
+  }, [searchTerm]);
 
   const categories = useMemo(
     () => ['all', ...Array.from(new Set(menuItems.map(item => item.category || 'Others'))).sort()],
@@ -232,12 +256,12 @@ export function EnhancedBillingInterface() {
   );
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <Card>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 bg-white p-4 min-h-screen">
+      <Card className="bg-white border border-gray-200">
         <CardHeader className="pb-4">
           <div className="flex items-center justify-between mb-4">
-            <CardTitle className="flex items-center gap-2">
-              <ShoppingCart className="h-5 w-5" />
+            <CardTitle className="flex items-center gap-2 text-gray-800">
+              <ShoppingCart className="h-5 w-5 text-[rgb(0,100,55)]" />
               Menu Items
             </CardTitle>
             <div className="flex items-center gap-2">
@@ -247,6 +271,7 @@ export function EnhancedBillingInterface() {
                 onClick={isConnected ? disconnectPrinter : connectPrinter}
                 disabled={isConnecting}
                 className="flex items-center gap-2"
+                style={isConnected ? { backgroundColor: 'rgb(0,100,55)', color: 'white' } : {}}
               >
                 {isConnected ? (
                   <>
@@ -266,9 +291,9 @@ export function EnhancedBillingInterface() {
                     <Settings className="h-4 w-4" />
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-white">
                   <DialogHeader>
-                    <DialogTitle>Printer Setup & Compatibility</DialogTitle>
+                    <DialogTitle className="text-gray-800">Printer Setup & Compatibility</DialogTitle>
                   </DialogHeader>
                   {compatibility && (
                     <WindowsCompatibilityGuide 
@@ -281,18 +306,18 @@ export function EnhancedBillingInterface() {
             </div>
           </div>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
             <Input
               placeholder="Search items..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 pr-10"
+              className="pl-10 pr-10 bg-white border-gray-300 focus:border-[rgb(0,100,55)]"
             />
             {searchTerm && (
               <Button
                 variant="ghost"
                 size="sm"
-                className="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6 p-0"
+                className="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6 p-0 text-gray-500 hover:text-gray-700"
                 onClick={() => setSearchTerm('')}
               >
                 <X className="h-4 w-4" />
@@ -303,12 +328,12 @@ export function EnhancedBillingInterface() {
         <CardContent>
           <Tabs value={selectedCategory} onValueChange={setSelectedCategory} className="w-full">
             <ScrollArea className="w-full mb-4">
-              <TabsList className="inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground w-max">
+              <TabsList className="inline-flex h-12 items-center justify-center rounded-md bg-gray-100 p-1 text-gray-700 w-max space-x-2">
                 {categories.map((category) => (
                   <TabsTrigger 
                     key={category} 
                     value={category} 
-                    className="whitespace-nowrap px-3 py-1.5 text-sm font-medium"
+                    className="whitespace-nowrap px-4 py-2 text-base font-medium data-[state=active]:bg-[rgb(0,100,55)] data-[state=active]:text-white"
                   >
                     {category === 'all' ? 'All Items' : category}
                   </TabsTrigger>
@@ -316,15 +341,15 @@ export function EnhancedBillingInterface() {
               </TabsList>
               <ScrollBar orientation="horizontal" />
             </ScrollArea>
-            {categories.map(category => (
+            {(searchTerm.trim() ? ['all'] : categories).map(category => (
               <TabsContent key={category} value={category} className="mt-0">
                 <ScrollArea className="h-[500px]">
                   <div className="grid grid-cols-2 gap-3 pr-2">
-                    {groupedMenuItems[category]?.map(item => (
+                    {(searchTerm.trim() ? filteredItems : groupedMenuItems[category] || []).map(item => (
                       <Button
                         key={item.id}
                         variant="outline"
-                        className="h-20 p-3 flex flex-col items-center justify-center hover:bg-primary hover:text-primary-foreground transition-colors"
+                        className="h-20 p-3 flex flex-col items-center justify-center border-gray-300 hover:bg-[rgb(0,100,55)] hover:text-white transition-colors"
                         onClick={() => addItemToBill(item)}
                       >
                         <div className="font-medium text-center text-sm leading-tight mb-1">
@@ -342,13 +367,10 @@ export function EnhancedBillingInterface() {
         </CardContent>
       </Card>
 
-   
-
-      {/* Bill Summary */}
-      <Card>
+      <Card className="bg-white border border-gray-200">
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>Bill Summary</CardTitle>
+            <CardTitle className="text-gray-800">Bill Summary</CardTitle>
             {!isConnected && billItems.length > 0 && (
               <div className="flex items-center gap-2">
                 <Button
@@ -361,6 +383,7 @@ export function EnhancedBillingInterface() {
                     billNumber: 'Preview',
                     date: new Date()
                   })}
+                  className="border-gray-300 text-gray-700 hover:bg-gray-100"
                 >
                   Print Preview
                 </Button>
@@ -368,6 +391,7 @@ export function EnhancedBillingInterface() {
                   variant="outline"
                   size="sm"
                   onClick={() => setShowCompatibilityGuide(true)}
+                  className="border-gray-300 text-gray-700 hover:bg-gray-100"
                 >
                   <HelpCircle className="h-4 w-4" />
                 </Button>
@@ -384,28 +408,43 @@ export function EnhancedBillingInterface() {
         </CardHeader>
         <CardContent className="space-y-4">
           {billItems.length === 0 ? (
-            <p className="text-muted-foreground text-center py-4">No items added yet</p>
+            <p className="text-gray-500 text-center py-4">No items added yet</p>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {billItems.map(item => (
-                <div key={item.id} className="flex items-center justify-between p-2 bg-accent rounded">
+                <div key={item.id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
                   <div className="flex-1">
-                    <div className="font-medium">{item.name}</div>
-                    <div className="text-sm text-muted-foreground">₹{item.price} each</div>
+                    <div className="font-medium text-gray-800">{item.name}</div>
+                    <div className="text-sm text-gray-500">₹{item.price} each</div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" onClick={() => updateQuantity(item.id, -1)}>
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      onClick={() => updateQuantity(item.id, -1)}
+                      className="border-gray-300 text-gray-700 hover:bg-gray-100"
+                    >
                       <Minus className="h-3 w-3" />
                     </Button>
-                    <span className="min-w-8 text-center">{item.quantity}</span>
-                    <Button size="sm" variant="outline" onClick={() => updateQuantity(item.id, 1)}>
+                    <span className="min-w-8 text-center text-gray-800">{item.quantity}</span>
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      onClick={() => updateQuantity(item.id, 1)}
+                      className="border-gray-300 text-gray-700 hover:bg-gray-100"
+                    >
                       <Plus className="h-3 w-3" />
                     </Button>
-                    <Button size="sm" variant="destructive" onClick={() => removeItem(item.id)}>
+                    <Button 
+                      size="sm" 
+                      variant="destructive" 
+                      onClick={() => removeItem(item.id)}
+                      className="bg-red-100 text-red-700 hover:bg-red-200 border-red-200"
+                    >
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
-                  <div className="min-w-16 text-right font-medium">
+                  <div className="min-w-16 text-right font-medium text-gray-800">
                     ₹{(item.price * item.quantity).toFixed(2)}
                   </div>
                 </div>
@@ -415,8 +454,8 @@ export function EnhancedBillingInterface() {
 
           {billItems.length > 0 && (
             <>
-              <div className="border-t pt-4 space-y-4">
-                <div className="flex justify-between text-xl font-bold">
+              <div className="border-t border-gray-200 pt-4 space-y-4">
+                <div className="flex justify-between text-xl font-bold text-gray-800">
                   <span>Total:</span>
                   <span>₹{total.toFixed(2)}</span>
                 </div>
@@ -427,87 +466,106 @@ export function EnhancedBillingInterface() {
                       className="w-full"
                       size="lg"
                       disabled={billItems.length === 0}
+                      style={{ backgroundColor: 'rgb(0,100,55)', color: 'white' }}
                     >
                       Process Payment
                     </Button>
                   </DialogTrigger>
-                  <DialogContent className="sm:max-w-md">
+                  <DialogContent className="sm:max-w-md bg-white">
                     <DialogHeader>
-                      <DialogTitle>Select Payment Method</DialogTitle>
+                      <DialogTitle className="text-gray-800">Confirm & Select Payment Method</DialogTitle>
                     </DialogHeader>
-                    <div className="flex flex-col gap-4 py-4">
-                      <div className="text-center text-lg font-semibold mb-4">
-                        Total: ₹{total.toFixed(2)}
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <Button
-                          size="lg"
-                          className="h-20 flex flex-col gap-2"
-                          onClick={() => generateBill('cash')}
-                          disabled={loading}
-                        >
-                          <Banknote className="h-8 w-8" />
-                          Cash
-                        </Button>
-                        <Button
-                          size="lg"
-                          className="h-20 flex flex-col gap-2"
-                          onClick={() => generateBill('upi')}
-                          disabled={loading}
-                        >
-                          <CreditCard className="h-8 w-8" />
-                          UPI
-                        </Button>
-                      </div>
-                      {loading && (
-                        <div className="text-center text-sm text-muted-foreground">
-                          Generating bill...
-                        </div>
-                      )}
-                      
-                      {/* Alternative printing options when no Bluetooth */}
-                      {!isConnected && (
-                        <div className="space-y-2 mt-4 pt-4 border-t">
-                          <div className="text-sm font-medium text-center">Alternative Options:</div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                const receiptData = {
-                                  items: billItems,
-                                  total: total,
-                                  paymentMode: 'cash',
-                                  billNumber: 'Preview',
-                                  date: new Date()
-                                };
-                                fallbackOptions?.copyToClipboard(receiptData);
-                              }}
-                            >
-                              Copy Text
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                const receiptData = {
-                                  items: billItems,
-                                  total: total,
-                                  paymentMode: 'cash',
-                                  billNumber: 'Preview',
-                                  date: new Date()
-                                };
-                                fallbackOptions?.generatePDF(receiptData);
-                              }}
-                            >
-                              Print PDF
-                            </Button>
+
+                    <div className="max-h-60 overflow-y-auto border rounded-md p-3 bg-gray-50 space-y-2 mb-4">
+                      {billItems.map(item => (
+                        <div key={item.id} className="flex justify-between text-sm">
+                          <div className="flex-1">
+                            <div className="font-medium">{item.name}</div>
+                            <div className="text-gray-500">₹{item.price} × {item.quantity}</div>
+                          </div>
+                          <div className="font-semibold text-gray-800">
+                            ₹{(item.price * item.quantity).toFixed(2)}
                           </div>
                         </div>
-                      )}
+                      ))}
+                      <div className="border-t border-gray-300 pt-2 flex justify-between font-bold text-gray-800">
+                        <span>Total:</span>
+                        <span>₹{total.toFixed(2)}</span>
+                      </div>
                     </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <Button
+                        size="lg"
+                        className="h-20 flex flex-col gap-2"
+                        onClick={() => generateBill('cash')}
+                        disabled={loading}
+                        style={{ backgroundColor: 'rgb(0,100,55)', color: 'white' }}
+                      >
+                        <Banknote className="h-8 w-8" />
+                        Cash
+                      </Button>
+                      <Button
+                        size="lg"
+                        className="h-20 flex flex-col gap-2"
+                        onClick={() => generateBill('upi')}
+                        disabled={loading}
+                        style={{ backgroundColor: 'rgb(0,100,55)', color: 'white' }}
+                      >
+                        <CreditCard className="h-8 w-8" />
+                        UPI
+                      </Button>
+                    </div>
+
+                    {loading && (
+                      <div className="text-center text-sm text-gray-500 mt-4">
+                        Generating bill...
+                      </div>
+                    )}
                   </DialogContent>
                 </Dialog>
+
+                {!isConnected && (
+                  <div className="space-y-2 mt-4 pt-4 border-t border-gray-200">
+                    <div className="text-sm font-medium text-center text-gray-700">Alternative Options:</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const receiptData = {
+                            items: billItems,
+                            total: total,
+                            paymentMode: 'cash',
+                            billNumber: 'Preview',
+                            date: new Date()
+                          };
+                          fallbackOptions?.copyToClipboard && fallbackOptions.copyToClipboard(receiptData);
+                        }}
+                        className="border-gray-300 text-gray-700 hover:bg-gray-100"
+                      >
+                        Copy Text
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const receiptData = {
+                            items: billItems,
+                            total: total,
+                            paymentMode: 'cash',
+                            billNumber: 'Preview',
+                            date: new Date()
+                          };
+                          fallbackOptions?.generatePDF && fallbackOptions.generatePDF(receiptData);
+                        }}
+                        className="border-gray-300 text-gray-700 hover:bg-gray-100"
+                      >
+                        Print PDF
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}

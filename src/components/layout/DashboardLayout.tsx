@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { useAuth } from '@/hooks/useAuth';
 import { LogOut, User } from 'lucide-react';
 
@@ -23,35 +23,41 @@ export function DashboardLayout({ children, title, description }: DashboardLayou
   };
 
   return (
-    <div className="min-h-screen bg-gradient-subtle">
-      <header className="bg-card shadow-soft border-b">
+    <div className="min-h-screen bg-white text-gray-900">
+      {/* Header - White with Green Text */}
+      <header className="border-b shadow-sm bg-white text-[rgb(0,100,55)]">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">{title}</h1>
+            <h1 className="text-2xl font-bold">{title}</h1>
             {description && (
-              <p className="text-muted-foreground text-sm">{description}</p>
+              <p className="text-sm opacity-80">{description}</p>
             )}
           </div>
           
           <div className="flex items-center gap-4">
-            <Card className="px-4 py-2">
+            <Card className="px-4 py-2 border text-[rgb(0,100,55)] bg-white">
               <div className="flex items-center gap-2">
-                <User className="h-4 w-4" />
+                <User className="h-4 w-4 text-[rgb(0,100,55)]" />
                 <div className="text-sm">
                   <div className="font-medium">{getRoleDisplay()}</div>
-                  <div className="text-muted-foreground">{franchiseId}</div>
+                  <div className="text-gray-500">{franchiseId}</div>
                 </div>
               </div>
             </Card>
             
-            <Button variant="outline" size="sm" onClick={signOut}>
-              <LogOut className="h-4 w-4 mr-2" />
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={signOut}
+            >
+              <LogOut className="h-20 w-20 mr-3" />
               Sign Out
             </Button>
           </div>
         </div>
       </header>
       
+      {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
         {children}
       </main>

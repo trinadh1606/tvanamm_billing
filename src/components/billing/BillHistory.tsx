@@ -210,39 +210,64 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   const gridCols = isCentral ? 'grid grid-cols-1 sm:grid-cols-6' : 'grid grid-cols-1 sm:grid-cols-5';
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="bg-white">
+      <CardHeader className="border-b">
         <CardTitle className="flex items-center gap-2">
-          <Calendar className="h-5 w-5" />
-          Bill History
-          {isCentral && <Badge variant="outline">All Franchises</Badge>}
+          <Calendar className="h-5 w-5" style={{ color: 'rgb(0, 100, 55)' }} />
+          <span style={{ color: 'rgb(0, 100, 55)' }}>Bill History</span>
+          {isCentral && <Badge variant="outline" style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}>All Franchises</Badge>}
         </CardTitle>
       </CardHeader>
 
-      <CardContent>
+      <CardContent className="bg-white">
         {loading ? (
           <div className="text-center py-8">Loading bills...</div>
         ) : filteredBills.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">No bills found</div>
+          <div className="text-center py-8 text-gray-600">No bills found</div>
         ) : (
           <div className="space-y-4">
             <div className="overflow-x-auto w-full">
-              <div className={`${gridCols} gap-4 p-4 bg-muted/50 rounded-lg font-medium min-w-[600px]`}>
-                <Button variant="ghost" onClick={() => handleSort('id')} className="justify-start h-auto p-0">
+              <div className={`${gridCols} gap-4 p-4 bg-gray-50 rounded-lg font-medium min-w-[600px]`}>
+                <Button 
+                  variant="ghost" 
+                  onClick={() => handleSort('id')} 
+                  className="justify-start h-auto p-0"
+                  style={{ color: 'rgb(0, 100, 55)' }}
+                >
                   Bill ID <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
                 {isCentral && (
-                  <Button variant="ghost" onClick={() => handleSort('franchise_id')} className="justify-start h-auto p-0">
+                  <Button 
+                    variant="ghost" 
+                    onClick={() => handleSort('franchise_id')} 
+                    className="justify-start h-auto p-0"
+                    style={{ color: 'rgb(0, 100, 55)' }}
+                  >
                     Franchise <ArrowUpDown className="ml-1 h-3 w-3" />
                   </Button>
                 )}
-                <Button variant="ghost" onClick={() => handleSort('mode_payment')} className="justify-start h-auto p-0">
+                <Button 
+                  variant="ghost" 
+                  onClick={() => handleSort('mode_payment')} 
+                  className="justify-start h-auto p-0"
+                  style={{ color: 'rgb(0, 100, 55)' }}
+                >
                   Payment Mode <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
-                <Button variant="ghost" onClick={() => handleSort('total')} className="justify-start h-auto p-0">
+                <Button 
+                  variant="ghost" 
+                  onClick={() => handleSort('total')} 
+                  className="justify-start h-auto p-0"
+                  style={{ color: 'rgb(0, 100, 55)' }}
+                >
                   Amount <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
-                <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0 sm:col-span-2">
+                <Button 
+                  variant="ghost" 
+                  onClick={() => handleSort('created_at')} 
+                  className="justify-start h-auto p-0 sm:col-span-2"
+                  style={{ color: 'rgb(0, 100, 55)' }}
+                >
                   Date <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
               </div>
@@ -251,11 +276,15 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
             <div className="overflow-x-auto w-full">
               <div className="space-y-2 min-w-[600px]">
                 {currentBills.map((bill) => (
-                  <div key={bill.id} className={`${gridCols} gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors text-sm sm:text-base`}>
+                  <div 
+                    key={bill.id} 
+                    className={`${gridCols} gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors text-sm sm:text-base`}
+                  >
                     <div className="break-words min-w-0">
                       <Button
                         variant="link"
-                        className="p-0 text-left font-medium text-primary underline"
+                        className="p-0 text-left font-medium underline"
+                        style={{ color: 'rgb(0, 100, 55)' }}
                         onClick={() => fetchBillItems(bill.id)}
                       >
                         #{bill.id}
@@ -263,14 +292,28 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                     </div>
                     {isCentral && (
                       <div className="break-words min-w-0">
-                        <Badge variant="outline" className="w-fit">{bill.franchise_id}</Badge>
+                        <Badge 
+                          variant="outline" 
+                          className="w-fit"
+                          style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}
+                        >
+                          {bill.franchise_id}
+                        </Badge>
                       </div>
                     )}
                     <div className="break-words min-w-0">
-                      <Badge variant={getPaymentBadgeVariant(bill.mode_payment)}>{bill.mode_payment?.toUpperCase()}</Badge>
+                      <Badge 
+                        variant={getPaymentBadgeVariant(bill.mode_payment)}
+                        style={{ 
+                          backgroundColor: bill.mode_payment?.toLowerCase() === 'cash' ? 'rgb(0, 100, 55)' : undefined,
+                          color: bill.mode_payment?.toLowerCase() === 'cash' ? 'white' : 'rgb(0, 100, 55)'
+                        }}
+                      >
+                        {bill.mode_payment?.toUpperCase()}
+                      </Badge>
                     </div>
-                    <div className="font-bold break-words min-w-0">₹{Number(bill.total).toFixed(2)}</div>
-                    <div className="text-sm text-muted-foreground sm:col-span-2 break-words min-w-0">
+                    <div className="font-bold break-words min-w-0" style={{ color: 'rgb(0, 100, 55)' }}>₹{Number(bill.total).toFixed(2)}</div>
+                    <div className="text-sm text-gray-600 sm:col-span-2 break-words min-w-0">
                       {new Date(bill.created_at).toLocaleDateString()}<br />
                       <span className="text-xs">{new Date(bill.created_at).toLocaleTimeString()}</span>
                     </div>
@@ -281,27 +324,48 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
             {totalPages > 1 && (
               <div className="flex items-center justify-between pt-4">
-                <div className="text-sm text-muted-foreground">
+                <div className="text-sm text-gray-600">
                   Showing {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredBills.length)} of {filteredBills.length}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage - 1)} disabled={currentPage === 1}>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => setCurrentPage(currentPage - 1)} 
+                    disabled={currentPage === 1}
+                    style={{ borderColor: 'rgb(0, 100, 55)', color: 'rgb(0, 100, 55)' }}
+                  >
                     <ChevronLeft className="h-4 w-4" /> Previous
                   </Button>
-                  <span className="text-sm">Page {currentPage} of {totalPages}</span>
-                  <Button variant="outline" size="sm" onClick={() => setCurrentPage(currentPage + 1)} disabled={currentPage === totalPages}>
+                  <span className="text-sm" style={{ color: 'rgb(0, 100, 55)' }}>Page {currentPage} of {totalPages}</span>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => setCurrentPage(currentPage + 1)} 
+                    disabled={currentPage === totalPages}
+                    style={{ borderColor: 'rgb(0, 100, 55)', color: 'rgb(0, 100, 55)' }}
+                  >
                     Next <ChevronRight className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
             )}
+
+            <div className="flex justify-end pt-4">
+              <Button 
+                onClick={exportToExcel}
+                style={{ backgroundColor: 'rgb(0, 100, 55)' }}
+              >
+                <Download className="h-4 w-4 mr-2" /> Export to Excel
+              </Button>
+            </div>
           </div>
         )}
 
         {selectedBillId !== null && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
             <div className="bg-white p-6 rounded-lg max-w-lg w-full shadow-lg relative">
-              <h2 className="text-xl font-bold mb-2">Items for Bill #{selectedBillId}</h2>
+              <h2 className="text-xl font-bold mb-2" style={{ color: 'rgb(0, 100, 55)' }}>Items for Bill #{selectedBillId}</h2>
               <Button
                 className="absolute top-2 right-2"
                 size="sm"
@@ -310,6 +374,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                   setSelectedBillId(null);
                   setBillItems([]);
                 }}
+                style={{ color: 'rgb(0, 100, 55)' }}
               >
                 Close
               </Button>
@@ -317,20 +382,20 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
               {itemLoading ? (
                 <p>Loading items...</p>
               ) : billItems.length === 0 ? (
-                <p className="text-muted-foreground">No items found for this bill.</p>
+                <p className="text-gray-600">No items found for this bill.</p>
               ) : (
                 <>
                   <ul className="space-y-2 mt-4 max-h-64 overflow-y-auto">
                     {billItems.map((item, index) => (
                       <li key={index} className="border p-2 rounded">
-                        <div className="font-medium">{item.item_name}</div>
-                        <div className="text-sm text-muted-foreground">
+                        <div className="font-medium" style={{ color: 'rgb(0, 100, 55)' }}>{item.item_name}</div>
+                        <div className="text-sm text-gray-600">
                           Quantity: {item.qty} | Rate: ₹{item.price} | Total: ₹{(item.qty * item.price).toFixed(2)}
                         </div>
                       </li>
                     ))}
                   </ul>
-                  <div className="mt-4 border-t pt-2 font-semibold text-right">
+                  <div className="mt-4 border-t pt-2 font-semibold text-right" style={{ color: 'rgb(0, 100, 55)' }}>
                     Total Bill Amount: ₹{billItems.reduce((acc, item) => acc + Number(item.qty) * Number(item.price), 0).toFixed(2)}
                   </div>
                 </>
