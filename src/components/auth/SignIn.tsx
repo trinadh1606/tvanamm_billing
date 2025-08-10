@@ -7,11 +7,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import logo from '@/assets/logo.png';
+import { Eye, EyeOff } from 'lucide-react';
 
 export function SignIn() {
   const [storeData, setStoreData] = useState({ franchiseId: '', password: '' });
   const [adminData, setAdminData] = useState({ franchiseId: '', email: '', password: '' });
   const [loading, setLoading] = useState(false);
+  const [showStorePassword, setShowStorePassword] = useState(false);
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
   const { signIn } = useAuth();
   const { toast } = useToast();
 
@@ -105,15 +108,24 @@ export function SignIn() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="store-password" className="text-gray-700">Password</Label>
-                  <Input
-                    id="store-password"
-                    type="password"
-                    placeholder="Enter password"
-                    value={storeData.password}
-                    onChange={(e) => setStoreData({ ...storeData, password: e.target.value })}
-                    required
-                    className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)]"
-                  />
+                  <div className="relative">
+                    <Input
+                      id="store-password"
+                      type={showStorePassword ? "text" : "password"}
+                      placeholder="Enter password"
+                      value={storeData.password}
+                      onChange={(e) => setStoreData({ ...storeData, password: e.target.value })}
+                      required
+                      className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)] pr-10"
+                    />
+                    <button
+                      type="button"
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
+                      onClick={() => setShowStorePassword(!showStorePassword)}
+                    >
+                      {showStorePassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  </div>
                 </div>
                 <Button 
                   type="submit" 
@@ -152,15 +164,24 @@ export function SignIn() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="admin-password" className="text-gray-700">Password</Label>
-                  <Input
-                    id="admin-password"
-                    type="password"
-                    placeholder="Enter password"
-                    value={adminData.password}
-                    onChange={(e) => setAdminData({ ...adminData, password: e.target.value })}
-                    required
-                    className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)]"
-                  />
+                  <div className="relative">
+                    <Input
+                      id="admin-password"
+                      type={showAdminPassword ? "text" : "password"}
+                      placeholder="Enter password"
+                      value={adminData.password}
+                      onChange={(e) => setAdminData({ ...adminData, password: e.target.value })}
+                      required
+                      className="border-gray-300 focus:border-[rgb(0,100,55)] focus:ring-[rgb(0,100,55)] pr-10"
+                    />
+                    <button
+                      type="button"
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
+                      onClick={() => setShowAdminPassword(!showAdminPassword)}
+                    >
+                      {showAdminPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  </div>
                 </div>
                 <Button 
                   type="submit" 

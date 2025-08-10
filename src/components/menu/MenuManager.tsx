@@ -45,18 +45,22 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
   const { franchiseId, user } = useAuth();
   const { toast } = useToast();
 
+  // Initial load:
+  // - Central: just load the list of franchises (do NOT auto-fetch any menu)
+  // - Store: load own menu immediately
   useEffect(() => {
     if (isCentral) {
-      setSelectedFranchiseId('FR-CENTRAL');
-      fetchMenuItems('FR-CENTRAL');
       fetchAvailableFranchises();
+      setMenuItems([]);
+      setFilteredItems([]);
+      setLoading(false);
     } else if (franchiseId) {
       fetchMenuItems(franchiseId);
     }
   }, [franchiseId, isCentral]);
 
+  // Filter menu items whenever searchQuery or menuItems change
   useEffect(() => {
-    // Filter menu items whenever searchQuery or menuItems change
     if (searchQuery.trim() === '') {
       setFilteredItems(menuItems);
     } else {
@@ -76,24 +80,31 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
     setFilteredItems([]);
 
     try {
-      let query = supabase.from('menu_items').select('*');
-
       let idToUse = '';
       if (isCentral) {
-        idToUse = targetFranchiseId || selectedFranchiseId || 'FR-CENTRAL';
+        idToUse = (targetFranchiseId || selectedFranchiseId || '').trim();
+        if (!idToUse) {
+          setLoading(false);
+          return; // user hasn't chosen a franchise yet
+        }
       } else {
         if (!franchiseId) throw new Error('Franchise ID not available');
         idToUse = franchiseId;
       }
 
-      query = query.eq('franchise_id', idToUse);
+      const { data, error } = await supabase
+        .from('menu_items')
+        .select('*')
+        .eq('franchise_id', idToUse)
+        .order('category', { ascending: true })
+        .order('name', { ascending: true });
 
-      const { data, error } = await query.order('category').order('name');
       if (error) throw error;
 
       setMenuItems(data || []);
       setFilteredItems(data || []);
     } catch (error: any) {
+      console.error('fetchMenuItems error:', error);
       toast({
         title: 'Error',
         description: 'Failed to fetch menu items',
@@ -104,17 +115,31 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
     }
   };
 
+  // Pull franchise IDs and de-duplicate by a normalized key (trim + upper)
   const fetchAvailableFranchises = async () => {
     setFetchingFranchises(true);
     try {
+      // We don't rely on PostgREST distinct; we dedupe on the client to handle whitespace/case issues.
       const { data, error } = await supabase
-        .from('bills_generated_billing')
-        .select('franchise_id');
+        .from('menu_items')
+        .select('franchise_id')
+        .order('franchise_id', { ascending: true });
 
       if (error) throw error;
 
-      const uniqueFranchises = [...new Set(data?.map(b => b.franchise_id) || [])];
-      setAvailableFranchises(uniqueFranchises);
+      const map = new Map<string, string>(); // key = normalized, value = first seen cleaned display
+      (data ?? []).forEach((row: any) => {
+        const raw = (row?.franchise_id ?? '') as string;
+        const cleaned = raw.trim();
+        if (!cleaned) return;
+        const key = cleaned.toUpperCase();
+        if (!map.has(key)) {
+          // Keep the first cleaned value as display (you can force uppercase if you prefer)
+          map.set(key, cleaned);
+        }
+      });
+
+      setAvailableFranchises(Array.from(map.values()));
     } catch (error) {
       console.error('Error fetching franchises:', error);
       toast({
@@ -132,12 +157,16 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
 
     try {
       const itemData = {
-        name: formData.name,
+        name: formData.name.trim(),
         price: Number(formData.price),
-        category: formData.category,
-        franchise_id: isCentral ? formData.franchise_id : franchiseId,
+        category: formData.category.trim(),
+        franchise_id: isCentral ? (formData.franchise_id || selectedFranchiseId).trim() : franchiseId,
         created_by: user?.id,
       };
+
+      if (!itemData.franchise_id) {
+        throw new Error('Franchise ID is required');
+      }
 
       if (editingItem) {
         const { error } = await supabase
@@ -169,12 +198,13 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
       setFormData({ name: '', price: '', category: '', franchise_id: '' });
 
       if (isCentral) {
-        fetchMenuItems(selectedFranchiseId);
-      } else {
+        if (selectedFranchiseId) fetchMenuItems(selectedFranchiseId);
+      } else if (franchiseId) {
         fetchMenuItems(franchiseId);
       }
 
     } catch (error: any) {
+      console.error('handleSubmit error:', error);
       toast({
         title: 'Error',
         description: error.message || 'Failed to save menu item',
@@ -211,11 +241,12 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
       });
 
       if (isCentral) {
-        fetchMenuItems(selectedFranchiseId);
-      } else {
+        if (selectedFranchiseId) fetchMenuItems(selectedFranchiseId);
+      } else if (franchiseId) {
         fetchMenuItems(franchiseId);
       }
     } catch (error: any) {
+      console.error('handleDelete error:', error);
       toast({
         title: 'Error',
         description: 'Failed to delete menu item',
@@ -230,7 +261,8 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
   };
 
   const handleFetchByFranchise = () => {
-    if (!selectedFranchiseId) {
+    const chosen = (selectedFranchiseId || '').trim();
+    if (!chosen) {
       toast({
         title: 'Error',
         description: 'Please select a franchise ID',
@@ -238,9 +270,10 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
       });
       return;
     }
-    fetchMenuItems(selectedFranchiseId);
+    fetchMenuItems(chosen);
   };
 
+  // Central users: see whatever is loaded; Store users: only own franchise
   const visibleItems = isCentral
     ? filteredItems
     : filteredItems.filter(item => item.franchise_id === franchiseId);
@@ -317,11 +350,13 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                     <Label htmlFor="franchise">Franchise ID</Label>
                     <Input
                       id="franchise"
-                      value={formData.franchise_id}
+                      value={formData.franchise_id || selectedFranchiseId}
                       onChange={(e) => setFormData({ ...formData, franchise_id: e.target.value })}
                       placeholder="Enter franchise ID"
-                      required
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Defaults to the selected franchise if left blank.
+                    </p>
                   </div>
                 )}
 
@@ -367,16 +402,19 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
               <Label>Select Franchise</Label>
               <Select
                 value={selectedFranchiseId}
-                onValueChange={setSelectedFranchiseId}
+                onValueChange={(val) => {
+                  // Only set the value; DO NOT fetch here.
+                  setSelectedFranchiseId(val.trim());
+                }}
                 disabled={fetchingFranchises}
               >
                 <SelectTrigger>
                   <SelectValue placeholder={fetchingFranchises ? 'Loading franchises...' : 'Select a franchise'} />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableFranchises.map(franchiseId => (
-                    <SelectItem key={franchiseId} value={franchiseId}>
-                      {franchiseId}
+                  {availableFranchises.map(frId => (
+                    <SelectItem key={frId} value={frId}>
+                      {frId}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -396,11 +434,13 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
           <div className="text-center py-8">Loading menu items...</div>
         ) : Object.keys(groupedItems).length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
-            {searchQuery.trim() !== ''
-              ? 'No menu items match your search'
-              : isCentral
-                ? `No menu items found for franchise ${selectedFranchiseId}`
-                : 'No menu items found'}
+            {isCentral && !selectedFranchiseId
+              ? 'Select a franchise and click “Get Menu”'
+              : searchQuery.trim() !== ''
+                ? 'No menu items match your search'
+                : isCentral
+                  ? `No menu items found for franchise ${selectedFranchiseId || '(none selected)'}`
+                  : 'No menu items found'}
           </div>
         ) : (
           <div className="space-y-6">
@@ -454,8 +494,8 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
           sourceItem={syncingItem}
           onSyncComplete={() => {
             if (isCentral) {
-              fetchMenuItems(selectedFranchiseId);
-            } else {
+              if (selectedFranchiseId) fetchMenuItems(selectedFranchiseId);
+            } else if (franchiseId) {
               fetchMenuItems(franchiseId);
             }
             setSyncDialogOpen(false);

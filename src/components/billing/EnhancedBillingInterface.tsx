@@ -345,7 +345,12 @@ export function EnhancedBillingInterface() {
               <TabsContent key={category} value={category} className="mt-0">
                 <ScrollArea className="h-[500px]">
                   <div className="grid grid-cols-2 gap-3 pr-2">
-                    {(searchTerm.trim() ? filteredItems : groupedMenuItems[category] || []).map(item => (
+                    {(searchTerm.trim()
+                      ? filteredItems
+                      : category === 'all'
+                        ? menuItems
+                        : groupedMenuItems[category] || []
+                    ).map(item => (
                       <Button
                         key={item.id}
                         variant="outline"
