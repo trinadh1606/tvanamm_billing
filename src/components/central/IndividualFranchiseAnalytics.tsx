@@ -38,7 +38,7 @@ interface PopularItem {
   quantity: number;
   revenue: number;
   percentage: number;
-  color?: string; // ✅ Added
+  color?: string;
 }
 
 export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchiseAnalyticsProps) {
@@ -64,6 +64,11 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
     'hsl(var(--warning))',
     'hsl(var(--secondary))',
     'hsl(var(--destructive))',
+    '#8884d8',
+    '#82ca9d',
+    '#ffc658',
+    '#ff8042',
+    '#a4de6c',
   ];
 
   useEffect(() => {
@@ -91,6 +96,7 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
       const fromDateStr = fromDate.toISOString().split('T')[0];
       const toDateStr = toDate.toISOString().split('T')[0];
 
+      // Fetch bills data
       const { data: bills, error: billsError } = await supabase
         .from('bills_generated_billing')
         .select('total, created_at')
@@ -101,6 +107,7 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
 
       if (billsError) throw billsError;
 
+      // Fetch ALL items for the franchise in date range
       const { data: items, error: itemsError } = await supabase
         .from('bill_items_generated_billing')
         .select(`
@@ -116,10 +123,12 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
 
       if (itemsError) throw itemsError;
 
+      // Calculate basic stats
       const todayRevenue = bills?.reduce((sum, bill) => sum + Number(bill.total), 0) || 0;
       const todayOrders = bills?.length || 0;
       const averageOrderValue = todayOrders > 0 ? todayRevenue / todayOrders : 0;
 
+      // Process hourly data
       const hourlyMap = new Map<number, { revenue: number; orders: number }>();
       for (let hour = 0; hour < 24; hour++) {
         hourlyMap.set(hour, { revenue: 0, orders: 0 });
@@ -156,6 +165,7 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
         displayHour: `${hour.toString().padStart(2, '0')}:00`,
       }));
 
+      // Process ALL items (no limit)
       const itemMap = new Map<string, { quantity: number; revenue: number }>();
       items?.forEach(item => {
         const current = itemMap.get(item.item_name) || { quantity: 0, revenue: 0 };
@@ -165,18 +175,17 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
         });
       });
 
-      const totalItemQuantity = Array.from(itemMap.values()).reduce((sum, item) => sum + item.quantity, 0);
+      const totalItemRevenue = Array.from(itemMap.values()).reduce((sum, item) => sum + item.revenue, 0);
 
       const itemsArray: PopularItem[] = Array.from(itemMap.entries())
         .map(([name, data], index) => ({
           item_name: name,
           quantity: data.quantity,
           revenue: data.revenue,
-          percentage: totalItemQuantity > 0 ? (data.quantity / totalItemQuantity) * 100 : 0,
-          color: pieColors[index % pieColors.length], // ✅ Assigned color
+          percentage: totalItemRevenue > 0 ? (data.revenue / totalItemRevenue) * 100 : 0,
+          color: pieColors[index % pieColors.length],
         }))
-        .sort((a, b) => b.quantity - a.quantity)
-        .slice(0, 10);
+        .sort((a, b) => b.revenue - a.revenue); // Sort by revenue descending
 
       setStats({
         todayRevenue,
@@ -265,34 +274,44 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
       </div>
 
       <Tabs defaultValue="items" className="w-full">
-
         <TabsContent value="items">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Zap className="h-5 w-5" />
-                  Sales Distribution
+                  Sales Distribution (All Items)
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="h-[300px]">
+                <div className="h-[400px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
-                        data={popularItems.slice(0, 5)}
+                        data={popularItems}
                         dataKey="revenue"
                         nameKey="item_name"
                         cx="50%"
                         cy="50%"
-                        outerRadius={80}
-                        labelLine={false} // ✅ Removed label
+                        outerRadius={100}
+                        innerRadius={30}
+                        paddingAngle={2}
+                        label={({ name, percent }) => 
+                          percent > 0.05 ? `${name}: ${(percent * 100).toFixed(1)}%` : ''}
                       >
-                        {popularItems.slice(0, 5).map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color || pieColors[index % pieColors.length]} />
+                        {popularItems.map((entry, index) => (
+                          <Cell 
+                            key={`cell-${index}`} 
+                            fill={entry.color || pieColors[index % pieColors.length]} 
+                          />
                         ))}
                       </Pie>
-                      <ChartTooltip />
+                      <ChartTooltip 
+                        formatter={(value, name, props) => [
+                          `₹${value.toLocaleString()}`, 
+                          `${name} (${props.payload.quantity} sold)`
+                        ]}
+                      />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -313,7 +332,7 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
                       <div>
                         <span className="font-medium">{item.item_name}</span>
                         <div className="text-xs text-muted-foreground">
-                          {item.percentage.toFixed(1)}% of total sales
+                          {item.percentage.toFixed(1)}% of total sales (₹{item.revenue.toLocaleString()})
                         </div>
                       </div>
                     </div>

@@ -3,7 +3,6 @@ import { FRCentralDashboard } from './FRCentralDashboard';
 import { MenuManager } from '@/components/menu/MenuManager';
 import { BillHistory } from '@/components/billing/BillHistory';
 import logo from '@/assets/logo.png';
-
 import { WeeklyPerformanceChart } from '@/components/analytics/WeeklyPerformanceChart';
 import {
   Tabs, TabsContent, TabsList, TabsTrigger
@@ -13,7 +12,7 @@ import {
   CardContent, CardFooter
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Download, Key, UserPlus } from 'lucide-react';
+import { Download, Key, UserPlus, Eye, EyeOff } from 'lucide-react';
 import { useState } from 'react';
 import {
   Dialog, DialogContent, DialogHeader,
@@ -36,6 +35,12 @@ export function CentralDashboard() {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [franchiseId, setFranchiseId] = useState('');
+  const [showPassword, setShowPassword] = useState({
+    oldPassword: false,
+    newPassword: false,
+    confirmPassword: false
+  });
   const { toast } = useToast();
 
   const handleRegister = async () => {
@@ -50,33 +55,70 @@ export function CentralDashboard() {
     }
 
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: registerForm.email,
+      // 1. Normalize and format Franchise ID
+      const numericPart = registerForm.franchiseId.replace(/[^0-9]/g, ''); // Extract digits only
+      const formattedFranchiseId = `FR-${numericPart.padStart(3, '0')}`; // Always like FR-001
+      const aliasFranchiseId = `fr-${numericPart.padStart(3, '0')}`; // for alias in email
+
+      // 2. Generate emails
+      const storeEmail = `store.${aliasFranchiseId}@yourdomain.com`;
+      const emailParts = registerForm.email.split('@');
+      const userEmailWithAlias = `${emailParts[0]}+${aliasFranchiseId}@${emailParts[1]}`;
+
+      // 3. Create store account in Supabase Auth
+      const { data: storeData, error: storeError } = await supabase.auth.signUp({
+        email: storeEmail,
         password: registerForm.password,
       });
-
-      const user = data?.user;
-      if (error || !user) {
-        toast({ title: "Error", description: error?.message || "Failed to register user", variant: "destructive" });
+      if (storeError || !storeData.user) {
+        toast({
+          title: "Error",
+          description: `Store account error: ${storeError?.message || "Unknown error"}`,
+          variant: "destructive",
+        });
         return;
       }
 
-      const formattedFranchiseId = `FR-${registerForm.franchiseId.replace(/^FR-/, '')}`;
+      const storeUserId = storeData.user.id;
 
+      // 4. Create main user account in Supabase Auth
+      const { data: userData, error: userError } = await supabase.auth.signUp({
+        email: userEmailWithAlias,
+        password: registerForm.password,
+      });
+      if (userError || !userData.user) {
+        // Rollback store account
+        await supabase.auth.admin.deleteUser(storeUserId);
+        toast({
+          title: "Error",
+          description: userError?.message || "Failed to register user",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const mainUserId = userData.user.id;
+
+      // 5. Insert profile record with ORIGINAL email
       const { error: insertError } = await supabase.from('profiles').insert([{
-        id: user.id,
+        id: mainUserId,
         name: registerForm.name,
-        email: registerForm.email,
-        franchise_id: formattedFranchiseId,
+        email: registerForm.email, // Original email, not alias
+        franchise_id: formattedFranchiseId, // Always FR-001 format
       }]);
 
       if (insertError) {
+        // Rollback both accounts if profile insert fails
+        await supabase.auth.admin.deleteUser(storeUserId);
+        await supabase.auth.admin.deleteUser(mainUserId);
         toast({ title: "Error", description: insertError.message, variant: "destructive" });
         return;
       }
 
-      toast({ title: "Success", description: "New user created" });
+      // ✅ Success
+      toast({ title: "Success", description: `User and store accounts created for ${formattedFranchiseId}` });
 
+      // Reset form & close dialog
       setIsRegisterDialogOpen(false);
       setRegisterForm({ name: "", email: "", franchiseId: "", password: "" });
     } catch (error) {
@@ -108,6 +150,7 @@ export function CentralDashboard() {
       setOldPassword('');
       setNewPassword('');
       setConfirmPassword('');
+      setFranchiseId('');
     } catch (error) {
       toast({ title: "Error", description: "Failed to change password", variant: "destructive" });
     }
@@ -231,29 +274,92 @@ export function CentralDashboard() {
         <DialogContent className="w-full sm:max-w-md" style={{ borderColor: themeColor }}>
           <DialogHeader>
             <DialogTitle style={{ color: themeColor }}>Change Password</DialogTitle>
-            <DialogDescription>Enter your current password and set a new one.</DialogDescription>
+            <DialogDescription>Enter your franchise ID and password details below.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            {[{ id: 'oldPassword', label: 'Current Password', value: oldPassword, set: setOldPassword },
-              { id: 'newPassword', label: 'New Password', value: newPassword, set: setNewPassword },
-              { id: 'confirmPassword', label: 'Confirm Password', value: confirmPassword, set: setConfirmPassword }]
-              .map(({ id, label, value, set }) => (
-                <div key={id} className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
-                  <Label htmlFor={id} className="text-right sm:col-span-1">{label}</Label>
+            {/* Franchise ID Field */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="franchiseId" className="text-right sm:col-span-1">Franchise ID</Label>
+              <Input
+                id="franchiseId"
+                type="text"
+                placeholder="Enter your franchise ID here"
+                value={franchiseId}
+                onChange={(e) => setFranchiseId(e.target.value)}
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
+            </div>
+            
+            {/* Password Fields */}
+            {[
+              { 
+                id: 'oldPassword', 
+                label: 'Current Password', 
+                value: oldPassword, 
+                set: setOldPassword,
+                placeholder: 'Enter your current password here',
+                show: showPassword.oldPassword,
+                toggle: () => setShowPassword({...showPassword, oldPassword: !showPassword.oldPassword})
+              },
+              { 
+                id: 'newPassword', 
+                label: 'New Password', 
+                value: newPassword, 
+                set: setNewPassword,
+                placeholder: 'Create your new password here (min 8 characters)',
+                show: showPassword.newPassword,
+                toggle: () => setShowPassword({...showPassword, newPassword: !showPassword.newPassword})
+              },
+              { 
+                id: 'confirmPassword', 
+                label: 'Confirm Password', 
+                value: confirmPassword, 
+                set: setConfirmPassword,
+                placeholder: 'Re-enter your new password here',
+                show: showPassword.confirmPassword,
+                toggle: () => setShowPassword({...showPassword, confirmPassword: !showPassword.confirmPassword})
+              }
+            ].map(({ id, label, value, set, placeholder, show, toggle }) => (
+              <div key={id} className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+                <Label htmlFor={id} className="text-right sm:col-span-1">{label}</Label>
+                <div className="relative sm:col-span-3">
                   <Input
                     id={id}
-                    type="password"
+                    type={show ? 'text' : 'password'}
                     value={value}
+                    placeholder={placeholder}
                     onChange={(e) => set(e.target.value)}
-                    className="sm:col-span-3"
+                    className="pr-10"
                     style={{ borderColor: themeColorLight }}
                   />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                    onClick={toggle}
+                  >
+                    {show ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                  </button>
                 </div>
-              ))}
+              </div>
+            ))}
           </div>
           <div className="flex flex-col sm:flex-row justify-end gap-2">
-            <Button variant="outline" onClick={() => setIsPasswordDialogOpen(false)} style={{ borderColor: themeColor, color: themeColor }} className="hover:bg-[rgba(0,100,55,0.1)] w-full sm:w-auto">Cancel</Button>
-            <Button onClick={handlePasswordChange} style={{ backgroundColor: themeColor }} className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto">Change Password</Button>
+            <Button 
+              variant="outline" 
+              onClick={() => setIsPasswordDialogOpen(false)} 
+              style={{ borderColor: themeColor, color: themeColor }} 
+              className="hover:bg-[rgba(0,100,55,0.1)] w-full sm:w-auto"
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handlePasswordChange} 
+              style={{ backgroundColor: themeColor }} 
+              className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
+            >
+              Change Password
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
