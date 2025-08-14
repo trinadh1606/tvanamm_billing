@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { Building2, Clock, TrendingUp, Zap } from 'lucide-react';
+import { Building2, Clock, TrendingUp } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { IndividualFranchiseAnalytics } from './IndividualFranchiseAnalytics';
 
@@ -14,6 +14,12 @@ interface FRCentralStats {
   lastActivity: string | null;
 }
 
+interface FRCentralTotalStats {
+  totalRevenue: number;
+  totalOrders: number;
+  avgOrderValue: number;
+}
+
 export function FRCentralDashboard() {
   const [stats, setStats] = useState<FRCentralStats>({
     todayRevenue: 0,
@@ -22,12 +28,20 @@ export function FRCentralDashboard() {
     status: 'quiet',
     lastActivity: null,
   });
+
+  const [totalStats, setTotalStats] = useState<FRCentralTotalStats>({
+    totalRevenue: 0,
+    totalOrders: 0,
+    avgOrderValue: 0,
+  });
+
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('realtime');
 
   useEffect(() => {
     fetchFRCentralStats();
-    
+    fetchFRCentralTotalStats();
+
     const channel = supabase
       .channel('fr-central-updates')
       .on(
@@ -40,6 +54,7 @@ export function FRCentralDashboard() {
         },
         () => {
           fetchFRCentralStats();
+          fetchFRCentralTotalStats();
         }
       )
       .subscribe();
@@ -52,7 +67,7 @@ export function FRCentralDashboard() {
   const fetchFRCentralStats = async () => {
     try {
       const now = new Date();
-      const istNow = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+      const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
       const today = istNow.toISOString().split('T')[0];
       const currentHourStart = `${today}T${istNow.getHours().toString().padStart(2, '0')}:00:00`;
 
@@ -67,8 +82,8 @@ export function FRCentralDashboard() {
 
       const todayRevenue = todayBills?.reduce((sum, bill) => sum + Number(bill.total), 0) || 0;
       const todayOrders = todayBills?.length || 0;
-      
-      const currentHourBills = todayBills?.filter(bill => 
+
+      const currentHourBills = todayBills?.filter(bill =>
         bill.created_at >= currentHourStart
       ) || [];
       const currentHourRevenue = currentHourBills.reduce((sum, bill) => sum + Number(bill.total), 0);
@@ -97,6 +112,26 @@ export function FRCentralDashboard() {
     }
   };
 
+  const fetchFRCentralTotalStats = async () => {
+    try {
+const { data, count, error } = await supabase
+  .from('bills_generated_billing')
+  .select('total', { count: 'exact' }) // exact total rows
+  .eq('franchise_id', 'FR-CENTRAL');
+
+if (error) throw error;
+
+const totalRevenue = data?.reduce((sum, bill) => sum + Number(bill.total), 0) || 0;
+const totalOrders = count || 0;
+const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+
+      setTotalStats({ totalRevenue, totalOrders, avgOrderValue });
+    } catch (error) {
+      console.error('Error fetching total stats:', error);
+    }
+  };
+
   const getStatusColor = (status: FRCentralStats['status']) => {
     switch (status) {
       case 'very-busy': return 'bg-destructive text-destructive-foreground';
@@ -106,78 +141,72 @@ export function FRCentralDashboard() {
     }
   };
 
-  const getStatusMessage = (status: FRCentralStats['status']) => {
-    switch (status) {
-      case 'very-busy': return 'VERY BUSY! 🔥';
-      case 'busy': return 'Busy Period 📈';
-      case 'normal': return 'Normal Activity';
-      default: return 'Quiet Period';
-    }
-  };
-
   if (loading) {
     return <div className="text-center py-8">Loading FR-CENTRAL analytics...</div>;
   }
 
   return (
     <div className="space-y-6">
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* Row 1: Total Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Today's Revenue</p>
-                <p className="text-2xl font-bold">₹{stats.todayRevenue.toFixed(2)}</p>
-              </div>
-              <TrendingUp className="h-6 w-6 text-success" />
-            </div>
+            <p className="text-sm font-medium text-muted-foreground">Total Orders</p>
+            <p className="text-2xl font-bold">{totalStats.totalOrders}</p>
           </CardContent>
         </Card>
-
         <Card>
           <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Today's Orders</p>
-                <p className="text-2xl font-bold">{stats.todayOrders}</p>
-              </div>
-              <Clock className="h-6 w-6 text-primary" />
-            </div>
+            <p className="text-sm font-medium text-muted-foreground">Total Revenue</p>
+            <p className="text-2xl font-bold">₹{totalStats.totalRevenue.toFixed(2)}</p>
           </CardContent>
         </Card>
-
         <Card>
           <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Avg Order Value</p>
-                <p className="text-2xl font-bold">
-                  ₹{stats.todayOrders > 0 ? (stats.todayRevenue / stats.todayOrders).toFixed(2) : '0.00'}
-                </p>
-              </div>
-              <Building2 className="h-6 w-6 text-secondary" />
-            </div>
+            <p className="text-sm font-medium text-muted-foreground">Avg Order Value</p>
+            <p className="text-2xl font-bold">₹{totalStats.avgOrderValue.toFixed(2)}</p>
           </CardContent>
         </Card>
+      </div>
 
+      {/* Row 2: Today's Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-sm font-medium text-muted-foreground">Today's Orders</p>
+            <p className="text-2xl font-bold">{stats.todayOrders}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-sm font-medium text-muted-foreground">Today's Revenue</p>
+            <p className="text-2xl font-bold">₹{stats.todayRevenue.toFixed(2)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-sm font-medium text-muted-foreground">Today's Avg Order</p>
+            <p className="text-2xl font-bold">
+              ₹{stats.todayOrders > 0 ? (stats.todayRevenue / stats.todayOrders).toFixed(2) : '0.00'}
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Detailed Analytics Tabs */}
-<Tabs defaultValue="realtime" className="w-full" onValueChange={(value) => setActiveTab(value)}>
-
+      <Tabs defaultValue="realtime" className="w-full" onValueChange={(value) => setActiveTab(value)}>
         <TabsContent value="realtime">
           <IndividualFranchiseAnalytics franchiseId="FR-CENTRAL" />
         </TabsContent>
-        
+
         <TabsContent value="hourly">
           <IndividualFranchiseAnalytics franchiseId="FR-CENTRAL" />
         </TabsContent>
-        
+
         <TabsContent value="popular">
           <IndividualFranchiseAnalytics franchiseId="FR-CENTRAL" />
         </TabsContent>
-        
+
         <TabsContent value="predictions">
           <Card>
             <CardHeader>

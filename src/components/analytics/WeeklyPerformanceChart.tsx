@@ -30,12 +30,11 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   const [franchiseList, setFranchiseList] = useState<string[]>([]);
   const [startDate, setStartDate] = useState<Date | null>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const [endDate, setEndDate] = useState<Date | null>(new Date());
+  const [totalOrders, setTotalOrders] = useState<number>(0);
   const { toast } = useToast();
 
   useEffect(() => {
-    if (isCentral) {
-      fetchFranchiseList();
-    }
+    if (isCentral) fetchFranchiseList();
     fetchWeeklyData();
   }, [isCentral]);
 
@@ -49,9 +48,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         .from('bills_generated_billing')
         .select('franchise_id')
         .order('franchise_id');
-
       if (error) throw error;
-
       const uniqueFranchises = Array.from(new Set(data?.map(item => item.franchise_id) || []));
       setFranchiseList(uniqueFranchises);
     } catch (error: any) {
@@ -66,19 +63,16 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
 
   const fetchWeeklyData = async () => {
     setLoading(true);
-
     try {
-      if (!startDate || !endDate) {
-        throw new Error("Please select both start and end dates");
-      }
+      if (!startDate || !endDate) throw new Error("Please select both start and end dates");
 
       let queryStartDate = new Date(startDate);
       let queryEndDate = new Date(endDate);
+      if (queryStartDate > queryEndDate) [queryStartDate, queryEndDate] = [queryEndDate, queryStartDate];
 
-      if (queryStartDate > queryEndDate) {
-        [queryStartDate, queryEndDate] = [queryEndDate, queryStartDate];
-      }
+      queryEndDate.setHours(23, 59, 59, 999);
 
+      // Fetch bills data
       let query = supabase
         .from('bills_generated_billing')
         .select('total, created_at, franchise_id')
@@ -92,14 +86,30 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
       }
 
       const { data: bills, error } = await query;
-
       if (error) throw error;
+
+      // Fetch total orders accurately
+      let countQuery = supabase
+        .from('bills_generated_billing')
+        .select('id', { head: true, count: 'exact' })
+        .gte('created_at', queryStartDate.toISOString())
+        .lte('created_at', queryEndDate.toISOString());
+
+      if (!isCentral) {
+        countQuery = countQuery.eq('franchise_id', userFranchiseId);
+      } else if (selectedFranchise) {
+        countQuery = countQuery.eq('franchise_id', selectedFranchise);
+      }
+
+      const { count, error: countError } = await countQuery;
+      if (countError) throw countError;
+      setTotalOrders(count || 0);
 
       const dailyDataMap = new Map<string, DayData>();
       const currentDate = new Date(queryStartDate);
 
       while (currentDate <= queryEndDate) {
-        const dateKey = formatDate(currentDate);
+        const dateKey = currentDate.toISOString().split('T')[0];
         dailyDataMap.set(dateKey, {
           day: currentDate.toLocaleDateString('en-GB', { weekday: 'short' }),
           date: dateKey,
@@ -113,17 +123,9 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
 
       bills?.forEach(bill => {
         const billDate = new Date(bill.created_at);
-        const dateKey = formatDate(billDate);
+        const dateKey = billDate.toISOString().split('T')[0];
 
-        const dayData = dailyDataMap.get(dateKey) || {
-          day: billDate.toLocaleDateString('en-GB', { weekday: 'short' }),
-          date: dateKey,
-          revenue: 0,
-          orders: 0,
-          avgOrderValue: 0,
-          dayOfWeek: billDate.toLocaleDateString('en-GB', { weekday: 'long' }),
-        };
-
+        const dayData = dailyDataMap.get(dateKey)!;
         dayData.revenue += Number(bill.total) || 0;
         dayData.orders += 1;
         dayData.avgOrderValue = dayData.orders > 0 ? dayData.revenue / dayData.orders : 0;
@@ -131,10 +133,9 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         dailyDataMap.set(dateKey, dayData);
       });
 
-      const filledWeekData = Array.from(dailyDataMap.values()).sort((a, b) => {
-        return new Date(a.date.split('/').reverse().join('-')).getTime() -
-          new Date(b.date.split('/').reverse().join('-')).getTime();
-      });
+      const filledWeekData = Array.from(dailyDataMap.values()).sort((a, b) =>
+        new Date(a.date).getTime() - new Date(b.date).getTime()
+      );
 
       setWeeklyData(filledWeekData);
     } catch (error: any) {
@@ -149,20 +150,9 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     }
   };
 
-  const formatDate = (date: Date): string => {
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
-  };
-
   const exportToExcel = () => {
     if (weeklyData.length === 0) {
-      toast({
-        title: "No Data",
-        description: "There is no data to export",
-        variant: "destructive",
-      });
+      toast({ title: "No Data", description: "There is no data to export", variant: "destructive" });
       return;
     }
 
@@ -181,24 +171,15 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     const filename = `weekly-performance-${selectedFranchise || 'all'}-${new Date().toISOString().split('T')[0]}.xlsx`;
     XLSX.writeFile(workbook, filename);
 
-    toast({
-      title: "Export Successful",
-      description: "Weekly performance data exported to Excel",
-    });
+    toast({ title: "Export Successful", description: "Weekly performance data exported to Excel" });
   };
 
   const totalWeekRevenue = weeklyData.reduce((sum, day) => sum + day.revenue, 0);
-  const totalWeekOrders = weeklyData.reduce((sum, day) => sum + day.orders, 0);
-  const avgWeeklyOrderValue = totalWeekOrders > 0 ? totalWeekRevenue / totalWeekOrders : 0;
-  const bestDay = weeklyData.reduce((best, day) => day.revenue > best.revenue ? day : best, weeklyData[0] || { revenue: 0, dayOfWeek: 'N/A' });
+  const avgWeeklyOrderValue = totalOrders > 0 ? totalWeekRevenue / totalOrders : 0;
 
-  const handleGetDetails = () => {
-    fetchWeeklyData();
-  };
+  const handleGetDetails = () => fetchWeeklyData();
 
-  if (loading) {
-    return <div className="text-center py-8">Loading weekly performance...</div>;
-  }
+  if (loading) return <div className="text-center py-8">Loading weekly performance...</div>;
 
   return (
     <div className="space-y-6">
@@ -219,16 +200,12 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                   >
                     <option value="">All Franchises</option>
                     {franchiseList.map(franchise => (
-                      <option key={franchise} value={franchise}>
-                        {franchise}
-                      </option>
+                      <option key={franchise} value={franchise}>{franchise}</option>
                     ))}
                   </select>
                 </div>
               )}
-              <Button onClick={handleGetDetails} variant="outline">
-                Get Data
-              </Button>
+              <Button onClick={handleGetDetails} variant="outline">Get Data</Button>
               <Button onClick={exportToExcel} variant="outline" disabled={weeklyData.length === 0}>
                 <Download className="h-4 w-4 mr-2" />
                 Export Excel
@@ -238,90 +215,64 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         </CardHeader>
 
         <CardContent>
-          {/* Date Pickers */}
-          <div className="mb-6">
-            <div className="flex items-center gap-4 flex-wrap">
-              <div>
-                <span className="block text-sm font-medium mb-1">Start Date</span>
-                <DatePicker
-                  selected={startDate}
-                  onChange={(date: Date | null) => setStartDate(date)}
-                  selectsStart
-                  startDate={startDate}
-                  endDate={endDate}
-                  dateFormat="dd/MM/yyyy"
-                  className="border p-2 rounded-md w-full"
-                  placeholderText="Select start date"
-                />
-              </div>
-              <div>
-                <span className="block text-sm font-medium mb-1">End Date</span>
-                <DatePicker
-                  selected={endDate}
-                  onChange={(date: Date | null) => setEndDate(date)}
-                  selectsEnd
-                  startDate={startDate}
-                  endDate={endDate}
-                  minDate={startDate}
-                  dateFormat="dd/MM/yyyy"
-                  className="border p-2 rounded-md w-full"
-                  placeholderText="Select end date"
-                />
-              </div>
+          <div className="mb-6 flex flex-wrap gap-4">
+            <div>
+              <span className="block text-sm font-medium mb-1">Start Date</span>
+              <DatePicker
+                selected={startDate}
+                onChange={(date: Date | null) => setStartDate(date)}
+                selectsStart
+                startDate={startDate}
+                endDate={endDate}
+                dateFormat="dd/MM/yyyy"
+                className="border p-2 rounded-md w-full"
+                placeholderText="Select start date"
+              />
+            </div>
+            <div>
+              <span className="block text-sm font-medium mb-1">End Date</span>
+              <DatePicker
+                selected={endDate}
+                onChange={(date: Date | null) => setEndDate(date)}
+                selectsEnd
+                startDate={startDate}
+                endDate={endDate}
+                minDate={startDate}
+                dateFormat="dd/MM/yyyy"
+                className="border p-2 rounded-md w-full"
+                placeholderText="Select end date"
+              />
             </div>
           </div>
 
-          {/* Weekly Summary Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <Card>
-              <CardContent className="p-4">
-                <div className="text-center">
-                  <p className="text-sm text-muted-foreground">Total Revenue</p>
-                  <p className="text-2xl font-bold">₹{totalWeekRevenue.toFixed(2)}</p>
-                </div>
+              <CardContent className="p-4 text-center">
+                <p className="text-sm text-muted-foreground">Total Revenue</p>
+                <p className="text-2xl font-bold">₹{totalWeekRevenue.toFixed(2)}</p>
               </CardContent>
             </Card>
             <Card>
-              <CardContent className="p-4">
-                <div className="text-center">
-                  <p className="text-sm text-muted-foreground">Total Orders</p>
-                  <p className="text-2xl font-bold">{totalWeekOrders}</p>
-                </div>
+              <CardContent className="p-4 text-center">
+                <p className="text-sm text-muted-foreground">Total Orders</p>
+                <p className="text-2xl font-bold">{totalOrders}</p>
               </CardContent>
             </Card>
             <Card>
-              <CardContent className="p-4">
-                <div className="text-center">
-                  <p className="text-sm text-muted-foreground">Avg Order Value</p>
-                  <p className="text-2xl font-bold">₹{avgWeeklyOrderValue.toFixed(2)}</p>
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <div className="text-center">
-                  <p className="text-sm text-muted-foreground">Best Day</p>
-                  <p className="text-2xl font-bold">{bestDay.dayOfWeek}</p>
-                  <p className="text-sm">₹{bestDay.revenue.toFixed(2)}</p>
-                </div>
+              <CardContent className="p-4 text-center">
+                <p className="text-sm text-muted-foreground">Avg Order Value</p>
+                <p className="text-2xl font-bold">₹{avgWeeklyOrderValue.toFixed(2)}</p>
               </CardContent>
             </Card>
           </div>
 
-          {/* Charts */}
-          {/* Daily Revenue Trend */}
+          {/* Charts remain unchanged */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <TrendingUp className="h-5 w-5" />
                 Daily Revenue Trend
               </h3>
-              <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                <span>Swipe right to left</span>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="9 18 15 12 9 6"></polyline>
-                </svg>
-              </div>
             </div>
             <div className="overflow-x-auto pb-2">
               <div style={{ minWidth: `${weeklyData.length * 60}px` }}>
@@ -331,28 +282,21 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis
                         dataKey="date"
-                        tick={{ fontSize: 12 }}
                         tickFormatter={(value) => {
-                          const date = new Date(value.split('/').reverse().join('-'));
-                          return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value})`;
+                          const date = new Date(value);
+                          return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value.split('-').reverse().join('/')})`;
                         }}
+                        tick={{ fontSize: 12 }}
                       />
                       <YAxis />
                       <Tooltip
                         formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Revenue']}
                         labelFormatter={(value) => {
-                          const date = new Date(value.split('/').reverse().join('-'));
+                          const date = new Date(value);
                           return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
                         }}
                       />
-                      <Line
-                        type="monotone"
-                        dataKey="revenue"
-                        stroke="hsl(var(--primary))"
-                        strokeWidth={3}
-                        dot={{ fill: 'hsl(var(--primary))', strokeWidth: 2, r: 6 }}
-                        activeDot={{ r: 8 }}
-                      />
+                      <Line type="monotone" dataKey="revenue" stroke="hsl(var(--primary))" strokeWidth={3} dot={{ r: 6, strokeWidth: 2, fill: 'hsl(var(--primary))' }} activeDot={{ r: 8 }} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -360,16 +304,9 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
             </div>
           </div>
 
-          {/* Daily Orders Count */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Daily Orders Count</h3>
-              <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                <span>Swipe right to left</span>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="9 18 15 12 9 6"></polyline>
-                </svg>
-              </div>
             </div>
             <div className="overflow-x-auto pb-2">
               <div style={{ minWidth: `${weeklyData.length * 60}px` }}>
@@ -379,31 +316,28 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis
                         dataKey="date"
-                        tick={{ fontSize: 12 }}
                         tickFormatter={(value) => {
-                          const date = new Date(value.split('/').reverse().join('-'));
-                          return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value})`;
+                          const date = new Date(value);
+                          return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value.split('-').reverse().join('/')})`;
                         }}
+                        tick={{ fontSize: 12 }}
                       />
                       <YAxis />
                       <Tooltip
                         formatter={(value: number) => [value, 'Orders']}
                         labelFormatter={(value) => {
-                          const date = new Date(value.split('/').reverse().join('-'));
+                          const date = new Date(value);
                           return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
                         }}
                       />
-                      <Bar
-                        dataKey="orders"
-                        fill="hsl(var(--secondary))"
-                        radius={[4, 4, 0, 0]}
-                      />
+                      <Bar dataKey="orders" fill="hsl(var(--secondary))" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </div>
             </div>
           </div>
+
         </CardContent>
       </Card>
     </div>
