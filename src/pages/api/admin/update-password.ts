@@ -95,9 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 2) STORE user via auth.users by email (service role key required)
     const { data: storeUserRow, error: storeUserErr } = await supabaseAdmin
-      // IMPORTANT: querying auth schema requires service role
-      .schema('auth')
-      .from<AuthUser>('users')
+      .from('auth.users')
       .select('id, email')
       .eq('email', storeEmail)
       .single();

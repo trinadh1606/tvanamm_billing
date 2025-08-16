@@ -1,9 +1,8 @@
-/// <reference lib="deno.ns" />
 // supabase/functions/update-passwords/index.ts
 // Supabase Edge Function (Deno) to update BOTH main & store user passwords
 // for a given franchiseId, restricted to central admin callers.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 
 type Payload = {
   franchiseId?: string; // accepts "FR-003" or "003"

@@ -231,3 +231,4 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
     </div>
   );
 }
+  

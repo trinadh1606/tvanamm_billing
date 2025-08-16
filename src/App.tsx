@@ -8,7 +8,7 @@ import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 
 // Supabase Client Setup
-import { supabase } from "../supabase/supabaseClient"; // Correct relative path
+import { supabase } from "./integrations/supabase/client"; // Correct relative path
 
 const queryClient = new QueryClient();
 
