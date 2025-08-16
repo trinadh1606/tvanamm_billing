@@ -22,12 +22,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import type { ReactNode } from 'react';
 
-// Prefer to match the server’s rules exactly.
-// - Strip leading FR-
-// - Keep only A-Z/0-9
-// - Digits-only => pad to 3 for storage/email (FR-007 / fr-007)
-// - Alphanumeric => no padding, uppercase for storage (FR-AB12) and lowercase for alias (fr-ab12)
+
+
 function normalizeFranchiseIdFlexible(input: string) {
   let raw = String(input || '').trim();
   raw = raw.replace(/^\s*FR[-_\s]?/i, ''); // remove leading FR- (case-insensitive)
