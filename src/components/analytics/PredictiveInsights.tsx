@@ -19,213 +19,265 @@ interface ItemTrend {
   rSquared: number;
   totalSold: number;
   totalRevenue: number;
+  predictedTomorrow: number;
+  predictedNext7Total: number;
+  predictedNext7Revenue: number;
 }
+
+type BillRow = { id: number; created_at: string };
+type ItemRow = { item_name: string; qty: number; price: number; bill_id: number };
 
 export function PredictiveInsights() {
   const [insights, setInsights] = useState<BusinessInsight[]>([]);
   const [itemTrends, setItemTrends] = useState<ItemTrend[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const { franchiseId } = useAuth();
 
   useEffect(() => {
     generateInsights();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [franchiseId]);
 
   const generateInsights = async () => {
     if (!franchiseId) return;
-    
     setLoading(true);
-    
     try {
-      // Get last 30 days of item data
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      
-      const { data: itemsData, error } = await supabase
-        .from('bill_items_generated_billing')
-        .select(`
-          item_name, 
-          qty,
-          price,
-          created_at,
-          bills_generated_billing!inner(franchise_id)
-        `)
-        .eq('bills_generated_billing.franchise_id', franchiseId)
-        .gte('created_at', thirtyDaysAgo.toISOString());
+      // 1) Get all bills for this franchise (we'll use bills.created_at as the time for each item)
+      const { data: bills, error: billsErr } = await supabase
+        .from('bills_generated_billing')
+        .select('id, created_at')
+        .eq('franchise_id', franchiseId)
+        .order('created_at', { ascending: true });
 
-      if (error) throw error;
+      if (billsErr) throw billsErr;
 
-      // Process data for linear regression
-      const trends = analyzeItemTrends(itemsData || []);
+      const billList: BillRow[] = bills ?? [];
+      if (billList.length === 0) {
+        setItemTrends([]);
+        setInsights([]);
+        setLoading(false);
+        return;
+      }
+
+      const billIdToCreatedAt = new Map<number, string>(
+        billList.map((b) => [b.id, b.created_at])
+      );
+      const billIds = billList.map((b) => b.id);
+
+      // 2) Fetch items for those bill ids (chunk to avoid IN(...) limits)
+      const CHUNK = 1000;
+      const allItems: ItemRow[] = [];
+      for (let i = 0; i < billIds.length; i += CHUNK) {
+        const slice = billIds.slice(i, i + CHUNK);
+        const { data: items, error: itemsErr } = await supabase
+          .from('bill_items_generated_billing')
+          .select('item_name, qty, price, bill_id')
+          .in('bill_id', slice);
+
+        if (itemsErr) throw itemsErr;
+        if (items?.length) allItems.push(...(items as ItemRow[]));
+      }
+
+      // 3) Attach created_at from the parent bill (no need for created_at on items)
+      const itemsData = allItems
+        .map((it) => {
+          const createdAt = billIdToCreatedAt.get(it.bill_id);
+          if (!createdAt) return null; // skip if unmatched (shouldn't happen if data is consistent)
+          return {
+            item_name: it.item_name,
+            qty: Number(it.qty) || 0,
+            price: Number(it.price) || 0,
+            created_at: createdAt,
+          };
+        })
+        .filter(Boolean) as { item_name: string; qty: number; price: number; created_at: string }[];
+
+      const trends = analyzeItemTrends(itemsData);
       setItemTrends(trends);
-      
-      // Generate AI insights based on trends
+
       const newInsights = generateBusinessInsights(trends);
       setInsights(newInsights);
-      
     } catch (error: any) {
       console.error('Error generating insights:', error);
+      setItemTrends([]);
+      setInsights([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Linear regression implementation
+  // Linear regression (with safety guards)
   const linearRegression = (x: number[], y: number[]) => {
     const n = x.length;
+    if (n === 0) return { slope: 0, intercept: 0, rSquared: 0 };
+
     let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
-    
     for (let i = 0; i < n; i++) {
       sumX += x[i];
       sumY += y[i];
       sumXY += x[i] * y[i];
       sumXX += x[i] * x[i];
     }
-    
-    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+
+    const denom = n * sumXX - sumX * sumX;
+    if (denom === 0) {
+      const meanY = sumY / n;
+      return { slope: 0, intercept: meanY, rSquared: 0 };
+    }
+
+    const slope = (n * sumXY - sumX * sumY) / denom;
     const intercept = (sumY - slope * sumX) / n;
-    
-    // Calculate R-squared
+
     let ssTot = 0, ssRes = 0;
     const meanY = sumY / n;
-    
     for (let i = 0; i < n; i++) {
       const fit = slope * x[i] + intercept;
       ssTot += Math.pow(y[i] - meanY, 2);
       ssRes += Math.pow(y[i] - fit, 2);
     }
-    
-    const rSquared = 1 - (ssRes / ssTot);
-    
+    const rSquared = ssTot === 0 ? 1 : Math.max(0, 1 - ssRes / ssTot);
     return { slope, intercept, rSquared };
   };
 
-  const analyzeItemTrends = (items: any[]): ItemTrend[] => {
-    // Group items by name and day
-    const itemMap = new Map<string, {day: number, qty: number, revenue: number}[]>();
-    
-    items.forEach(item => {
+  const analyzeItemTrends = (
+    items: { item_name: string; qty: number; price: number; created_at: string }[]
+  ): ItemTrend[] => {
+    const itemMap = new Map<string, { day: number; qty: number; revenue: number }[]>();
+
+    items.forEach((item) => {
+      if (!item.created_at) return; // safety
       const date = new Date(item.created_at);
-      // Use day of year as x value (simplified approach)
-      const day = Math.floor(date.getTime() / (1000 * 60 * 60 * 24));
-      
-      if (!itemMap.has(item.item_name)) {
-        itemMap.set(item.item_name, []);
-      }
-      
-      itemMap.get(item.item_name)?.push({
+      const day = Math.floor(date.getTime() / (1000 * 60 * 60 * 24)); // daily bucket
+      if (!itemMap.has(item.item_name)) itemMap.set(item.item_name, []);
+      itemMap.get(item.item_name)!.push({
         day,
-        qty: item.qty,
-        revenue: item.qty * item.price
+        qty: Number(item.qty) || 0,
+        revenue: (Number(item.qty) || 0) * (Number(item.price) || 0),
       });
     });
-    
-    // Calculate trends for each item
+
     const trends: ItemTrend[] = [];
-    
+
     itemMap.forEach((dailyData, item_name) => {
-      // Aggregate by day
-      const dayMap = new Map<number, {qty: number, revenue: number}>();
-      
-      dailyData.forEach(data => {
-        if (!dayMap.has(data.day)) {
-          dayMap.set(data.day, { qty: 0, revenue: 0 });
-        }
+      const dayMap = new Map<number, { qty: number; revenue: number }>();
+      dailyData.forEach((data) => {
+        if (!dayMap.has(data.day)) dayMap.set(data.day, { qty: 0, revenue: 0 });
         const existing = dayMap.get(data.day)!;
         dayMap.set(data.day, {
           qty: existing.qty + data.qty,
-          revenue: existing.revenue + data.revenue
+          revenue: existing.revenue + data.revenue,
         });
       });
-      
-      // Prepare data for regression
-      const days = Array.from(dayMap.keys()).sort();
-      const quantities = days.map(day => dayMap.get(day)!.qty);
-      
-      // Only analyze items with enough data points
+
+      const days = Array.from(dayMap.keys()).sort((a, b) => a - b);
+      const quantities = days.map((d) => dayMap.get(d)!.qty);
+
       if (days.length >= 5) {
-        const x = days.map((day, i) => i); // Use sequence numbers as x values
+        const x = days.map((_d, i) => i); // 0..n-1
         const y = quantities;
-        
+
         const { slope, intercept, rSquared } = linearRegression(x, y);
-        
+
         const totalSold = quantities.reduce((sum, q) => sum + q, 0);
-        const totalRevenue = days.reduce((sum, day) => sum + dayMap.get(day)!.revenue, 0);
-        
+        const totalRevenue = days.reduce((sum, d) => sum + dayMap.get(d)!.revenue, 0);
+        const avgPrice = totalSold > 0 ? totalRevenue / totalSold : 0;
+
+        const n = x.length;
+        const predict = (t: number) => Math.max(0, slope * t + intercept);
+        const predictedTomorrow = predict(n);
+        const predictedNext7Total = Array.from({ length: 7 }, (_, h) => predict(n + h)).reduce(
+          (a, b) => a + b,
+          0
+        );
+        const predictedNext7Revenue = predictedNext7Total * avgPrice;
+
         trends.push({
           item_name,
           slope,
           intercept,
           rSquared,
           totalSold,
-          totalRevenue
+          totalRevenue,
+          predictedTomorrow,
+          predictedNext7Total,
+          predictedNext7Revenue,
         });
       }
     });
-    
-    // Sort by strongest positive trend
+
     return trends.sort((a, b) => b.slope - a.slope);
   };
 
   const generateBusinessInsights = (trends: ItemTrend[]): BusinessInsight[] => {
     const insights: BusinessInsight[] = [];
-    
-    // Get top trending items
-    const topTrending = trends.filter(t => t.slope > 0 && t.rSquared > 0.5).slice(0, 3);
-    const decliningItems = trends.filter(t => t.slope < -0.5 && t.rSquared > 0.5).slice(0, 3);
-    
-    // Generate optimization recommendations
+
+    const topTrending = trends.filter((t) => t.slope > 0 && t.rSquared > 0.5).slice(0, 3);
+    const decliningItems = trends.filter((t) => t.slope < -0.5 && t.rSquared > 0.5).slice(0, 3);
+
     if (topTrending.length > 0) {
       insights.push({
-        title: "Hot Selling Items",
-        content: `These items are trending up: ${topTrending.map(t => t.item_name).join(', ')}. Consider increasing stock and promoting them.`,
-        type: "optimization",
-        icon: "🔥",
-        color: "success"
+        title: 'Selling Fast',
+        content: `Sales are increasing for: ${topTrending
+          .map((t) => t.item_name)
+          .join(', ')}. Stock up and highlight these on your menu and offers.`,
+        type: 'optimization',
+        icon: '🔥',
+        color: 'success',
       });
     }
-    
+
     if (decliningItems.length > 0) {
       insights.push({
-        title: "Declining Items",
-        content: `These items are losing popularity: ${decliningItems.map(t => t.item_name).join(', ')}. Consider promotions or replacements.`,
-        type: "optimization",
-        icon: "📉",
-        color: "warning"
+        title: 'Falling Sales',
+        content: `Sales are decreasing for: ${decliningItems
+          .map((t) => t.item_name)
+          .join(', ')}. Try limited-time deals, combos, or consider replacing them.`,
+        type: 'optimization',
+        icon: '📉',
+        color: 'warning',
       });
     }
-    
-    // Generate growth opportunities
-    const highValueItems = [...trends]
-      .sort((a, b) => b.totalRevenue - a.totalRevenue)
-      .slice(0, 3);
-    
+
+    const highValueItems = [...trends].sort((a, b) => b.totalRevenue - a.totalRevenue).slice(0, 3);
+
     if (highValueItems.length > 0) {
       insights.push({
-        title: "High Value Items",
-        content: `Your most profitable items: ${highValueItems.map(t => `${t.item_name} (₹${t.totalRevenue.toFixed(2)})`).join(', ')}. Focus on these for maximum revenue.`,
-        type: "growth",
-        icon: "💰",
-        color: "primary"
+        title: 'Top Revenue Items',
+        content: `These bring in the most money: ${highValueItems
+          .map((t) => `${t.item_name} (₹${t.totalRevenue.toFixed(0)})`)
+          .join(', ')}. Keep them easy to find and well stocked.`,
+        type: 'growth',
+        icon: '💰',
+        color: 'primary',
       });
     }
-    
-    // General recommendations
+
     insights.push({
-      title: "Menu Optimization",
-      content: "Analyze trends weekly to adjust your menu for maximum profitability.",
-      type: "growth",
-      icon: "📊",
-      color: "secondary"
+      title: 'Keep Tuning Your Menu',
+      content: 'Review trends regularly and adjust prices, bundles, and visibility to boost profit.',
+      type: 'growth',
+      icon: '📊',
+      color: 'secondary',
     });
-    
+
     return insights;
   };
 
+  const inr = (n: number) =>
+    new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: 0,
+    }).format(n);
+
   if (loading) {
-    return <div className="text-center py-8">Analyzing item trends...</div>;
+    return <div className="text-center py-8">Analyzing your sales to date…</div>;
   }
+
+  const predictedLeaders = [...itemTrends]
+    .sort((a, b) => b.predictedNext7Total - a.predictedNext7Total)
+    .slice(0, 8);
 
   return (
     <Card>
@@ -236,36 +288,83 @@ export function PredictiveInsights() {
         </CardTitle>
       </CardHeader>
       <CardContent>
+        {/* Insights */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-3">
-            <h4 className="font-semibold text-sm">Optimization Recommendations</h4>
+            <h4 className="font-semibold text-sm">Suggestions to Improve Sales</h4>
             <div className="space-y-2">
-              {insights.filter(insight => insight.type === 'optimization').map((insight, index) => (
-                <div key={index} className="p-3 bg-success/10 rounded-lg border border-success/20">
-                  <p className="text-sm font-medium">{insight.icon} {insight.title}</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {insight.content}
-                  </p>
-                </div>
-              ))}
+              {insights
+                .filter((i) => i.type === 'optimization')
+                .map((insight, index) => (
+                  <div key={index} className="p-3 bg-success/10 rounded-lg border border-success/20">
+                    <p className="text-sm font-medium">
+                      {insight.icon} {insight.title}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">{insight.content}</p>
+                  </div>
+                ))}
             </div>
           </div>
-          
+
           <div className="space-y-3">
-            <h4 className="font-semibold text-sm">Growth Opportunities</h4>
+            <h4 className="font-semibold text-sm">Ways to Grow Revenue</h4>
             <div className="space-y-2">
-              {insights.filter(insight => insight.type === 'growth').map((insight, index) => (
-                <div key={index} className="p-3 bg-primary/10 rounded-lg border border-primary/20">
-                  <p className="text-sm font-medium">{insight.icon} {insight.title}</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {insight.content}
-                  </p>
-                </div>
-              ))}
+              {insights
+                .filter((i) => i.type === 'growth')
+                .map((insight, index) => (
+                  <div key={index} className="p-3 bg-primary/10 rounded-lg border border-primary/20">
+                    <p className="text-sm font-medium">
+                      {insight.icon} {insight.title}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">{insight.content}</p>
+                  </div>
+                ))}
             </div>
           </div>
+        </div>
+
+        {/* Forecasts Table */}
+        <div className="mt-6">
+          <h4 className="font-semibold text-sm mb-2">Forecasts for the Next 7 Days</h4>
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="min-w-full text-sm">
+              <thead className="bg-muted/40">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium">Item</th>
+                  <th className="text-right px-3 py-2 font-medium">Trend Confidence (R²)</th>
+                  <th className="text-right px-3 py-2 font-medium">Tomorrow (units)</th>
+                  <th className="text-right px-3 py-2 font-medium">Next 7 days (units)</th>
+                  <th className="text-right px-3 py-2 font-medium">Estimated revenue (next 7 days)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {predictedLeaders.map((t) => (
+                  <tr key={t.item_name} className="border-t">
+                    <td className="px-3 py-2">{t.item_name}</td>
+                    <td className="px-3 py-2 text-right">{t.rSquared.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right">{Math.round(t.predictedTomorrow)}</td>
+                    <td className="px-3 py-2 text-right">{Math.round(t.predictedNext7Total)}</td>
+                    <td className="px-3 py-2 text-right">{inr(t.predictedNext7Revenue)}</td>
+                  </tr>
+                ))}
+                {predictedLeaders.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-4 text-center text-muted-foreground">
+                      Not enough data to make forecasts yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2">
+            Forecasts are based on all your available sales data up to today. “Trend confidence (R²)” shows how well the
+            trend fits your past data (0 = weak, 1 = strong). Numbers are estimates and never go below zero.
+          </p>
         </div>
       </CardContent>
     </Card>
   );
 }
+
+export default PredictiveInsights;

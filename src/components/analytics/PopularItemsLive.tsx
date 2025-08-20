@@ -1,12 +1,14 @@
-import { useState, useEffect } from 'react';
+"use client";
+
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Star, TrendingUp, Coffee, Award } from 'lucide-react';
+import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
+import { Coffee, Award } from 'lucide-react';
 
 interface PopularItem {
   item_name: string;
@@ -16,7 +18,6 @@ interface PopularItem {
   growth: number;
   category?: string;
 }
-
 interface CategoryData {
   category: string;
   revenue: number;
@@ -24,19 +25,35 @@ interface CategoryData {
   color: string;
   percentage: number;
 }
+interface AllItem {
+  item_name: string;
+  total_quantity: number;
+  total_revenue: number;
+  category: string;
+}
+
+const toISOStart = (dStr: string) => new Date(`${dStr}T00:00:00`).toISOString();
+const nextDayISO = (dStr: string) => {
+  const d = new Date(`${dStr}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString();
+};
 
 export function PopularItemsLive() {
   const [popularItems, setPopularItems] = useState<PopularItem[]>([]);
   const [categoryData, setCategoryData] = useState<CategoryData[]>([]);
+  const [allItems, setAllItems] = useState<AllItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [insights, setInsights] = useState<string[]>([]);
-  
+
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+
   const { franchiseId } = useAuth();
 
   useEffect(() => {
-    fetchPopularItems();
+    if (!franchiseId) return;
+    fetchData();
 
-    // Set up real-time subscription for new orders
     const channel = supabase
       .channel('items-changes')
       .on(
@@ -45,29 +62,25 @@ export function PopularItemsLive() {
           event: 'INSERT',
           schema: 'public',
           table: 'bill_items_generated_billing',
-          filter: `franchise_id=eq.${franchiseId}`
+          filter: `franchise_id=eq.${franchiseId}`,
         },
-        () => {
-          console.log('New item sold, refreshing popular items...');
-          fetchPopularItems();
-        }
+        () => fetchData({ start: startDate || undefined, end: endDate || undefined })
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [franchiseId]);
 
-  const fetchPopularItems = async () => {
+  const fetchData = async (range?: { start?: string; end?: string }) => {
     if (!franchiseId) return;
-    
     setLoading(true);
-    
+
     try {
-      const today = new Date().toISOString().split('T')[0];
-      
-      // Get today's bill items with menu details - join with bills for date filtering
+      // ---- today vs yesterday (unchanged) ----
+      const todayStr = new Date().toISOString().split('T')[0];
       const { data: todayItems, error: todayError } = await supabase
         .from('bill_items_generated_billing')
         .select(`
@@ -79,156 +92,226 @@ export function PopularItemsLive() {
           bills_generated_billing!inner(created_at)
         `)
         .eq('franchise_id', franchiseId)
-        .gte('bills_generated_billing.created_at', today);
-
+        .gte('bills_generated_billing.created_at', todayStr);
       if (todayError) throw todayError;
 
-      // Get yesterday's data for growth comparison
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
-      
+      const y = new Date(); y.setDate(y.getDate() - 1);
+      const yStr = y.toISOString().split('T')[0];
       const { data: yesterdayItems, error: yesterdayError } = await supabase
         .from('bill_items_generated_billing')
         .select(`
-          item_name, 
+          item_name,
           qty,
           bills_generated_billing!inner(created_at)
         `)
         .eq('franchise_id', franchiseId)
-        .gte('bills_generated_billing.created_at', yesterdayStr)
-        .lt('bills_generated_billing.created_at', today);
-
+        .gte('bills_generated_billing.created_at', yStr)
+        .lt('bills_generated_billing.created_at', todayStr);
       if (yesterdayError) throw yesterdayError;
 
-      // Process today's data
-      const itemMap = new Map<string, { 
-        quantity: number; 
-        revenue: number; 
-        category: string; 
-      }>();
-
-      todayItems?.forEach(item => {
-        const current = itemMap.get(item.item_name) || { 
-          quantity: 0, 
-          revenue: 0, 
-          category: item.menu_items?.category || 'Other' 
-        };
-        itemMap.set(item.item_name, {
-          quantity: current.quantity + item.qty,
-          revenue: current.revenue + (item.qty * Number(item.price)),
-          category: current.category,
+      const todayMap = new Map<string, { quantity: number; revenue: number; category: string }>();
+      todayItems?.forEach((row: any) => {
+        const prev = todayMap.get(row.item_name) || { quantity: 0, revenue: 0, category: row?.menu_items?.category || 'Other' };
+        todayMap.set(row.item_name, {
+          quantity: prev.quantity + (row?.qty ?? 0),
+          revenue: prev.revenue + (row?.qty ?? 0) * Number(row?.price ?? 0),
+          category: prev.category,
         });
       });
-
-      // Process yesterday's data for growth comparison
       const yesterdayMap = new Map<string, number>();
-      yesterdayItems?.forEach(item => {
-        const current = yesterdayMap.get(item.item_name) || 0;
-        yesterdayMap.set(item.item_name, current + item.qty);
+      yesterdayItems?.forEach((row: any) => {
+        const prev = yesterdayMap.get(row.item_name) || 0;
+        yesterdayMap.set(row.item_name, prev + (row?.qty ?? 0));
       });
-
-      // Calculate total for percentages
-      const totalQuantity = Array.from(itemMap.values()).reduce((sum, item) => sum + item.quantity, 0);
-      const totalRevenue = Array.from(itemMap.values()).reduce((sum, item) => sum + item.revenue, 0);
-
-      // Convert to array and calculate percentages and growth
-      const itemsArray: PopularItem[] = Array.from(itemMap.entries())
+      const totalQtyToday = Array.from(todayMap.values()).reduce((s, v) => s + v.quantity, 0);
+      const itemsArray: PopularItem[] = Array.from(todayMap.entries())
         .map(([name, data]) => {
-          const yesterdayQty = yesterdayMap.get(name) || 0;
-          const growth = yesterdayQty > 0 ? ((data.quantity - yesterdayQty) / yesterdayQty) * 100 : 0;
-          
+          const yq = yesterdayMap.get(name) || 0;
+          const growth = yq > 0 ? ((data.quantity - yq) / yq) * 100 : 0;
           return {
             item_name: name,
             total_quantity: data.quantity,
             total_revenue: data.revenue,
-            percentage: totalQuantity > 0 ? (data.quantity / totalQuantity) * 100 : 0,
+            percentage: totalQtyToday > 0 ? (data.quantity / totalQtyToday) * 100 : 0,
             growth,
             category: data.category,
           };
         })
         .sort((a, b) => b.total_quantity - a.total_quantity)
         .slice(0, 10);
+      setPopularItems(itemsArray);
 
-      // Calculate category data
-      const categoryMap = new Map<string, { revenue: number; items: number }>();
+      // ---- range / all-time ----
+      const startISO = range?.start ? toISOStart(range.start) : undefined;
+      const endISO = range?.end ? nextDayISO(range.end) : undefined;
+
+      let allQuery = supabase
+        .from('bill_items_generated_billing')
+        .select(`
+          item_name,
+          qty,
+          price,
+          menu_items!inner(category),
+          bills_generated_billing!inner(created_at)
+        `)
+        .eq('franchise_id', franchiseId);
+      if (startISO) allQuery = allQuery.gte('bills_generated_billing.created_at', startISO);
+      if (endISO) allQuery = allQuery.lt('bills_generated_billing.created_at', endISO);
+
+      const { data: allRows, error: allErr } = await allQuery;
+      if (allErr) throw allErr;
+
+      const allMap = new Map<string, { quantity: number; revenue: number; category: string }>();
+      allRows?.forEach((row: any) => {
+        const prev = allMap.get(row.item_name) || { quantity: 0, revenue: 0, category: row?.menu_items?.category || 'Other' };
+        allMap.set(row.item_name, {
+          quantity: prev.quantity + (row?.qty ?? 0),
+          revenue: prev.revenue + (row?.qty ?? 0) * Number(row?.price ?? 0),
+          category: prev.category,
+        });
+      });
+
+      const allItemsArr: AllItem[] = Array.from(allMap.entries())
+        .map(([name, v]) => ({
+          item_name: name,
+          total_quantity: v.quantity,
+          total_revenue: v.revenue,
+          category: v.category,
+        }))
+        .sort((a, b) => b.total_revenue - a.total_revenue);
+      setAllItems(allItemsArr);
+
+      const totalRevenue = allItemsArr.reduce((s, v) => s + v.total_revenue, 0);
+      const rawCategories = Array.from(
+        allItemsArr.reduce((m, item) => {
+          const c = m.get(item.category) || { revenue: 0, items: 0 };
+          c.revenue += item.total_revenue;
+          c.items += 1;
+          m.set(item.category, c);
+          return m;
+        }, new Map<string, { revenue: number; items: number }>())
+      );
+
       const colors = [
         'hsl(var(--primary))',
         'hsl(var(--success))',
         'hsl(var(--warning))',
         'hsl(var(--secondary))',
         'hsl(var(--destructive))',
+        'hsl(var(--muted-foreground))',
       ];
 
-      itemsArray.forEach(item => {
-        const current = categoryMap.get(item.category || 'Other') || { revenue: 0, items: 0 };
-        categoryMap.set(item.category || 'Other', {
-          revenue: current.revenue + item.total_revenue,
-          items: current.items + 1,
-        });
-      });
-
-      const categoriesArray: CategoryData[] = Array.from(categoryMap.entries())
-        .map(([category, data], index) => ({
+      const cats: CategoryData[] = rawCategories
+        .map(([category, v], idx) => ({
           category,
-          revenue: data.revenue,
-          items: data.items,
-          color: colors[index % colors.length],
-          percentage: totalRevenue > 0 ? (data.revenue / totalRevenue) * 100 : 0,
+          revenue: v.revenue,
+          items: v.items,
+          color: colors[idx % colors.length],
+          percentage: totalRevenue > 0 ? (v.revenue / totalRevenue) * 100 : 0,
         }))
         .sort((a, b) => b.revenue - a.revenue);
-
-      // Generate insights
-      const newInsights: string[] = [];
-      
-      if (itemsArray.length > 0) {
-        const topItem = itemsArray[0];
-        newInsights.push(`🏆 "${topItem.item_name}" is your bestseller with ${topItem.total_quantity} sold today`);
-        
-        if (topItem.growth > 20) {
-          newInsights.push(`📈 "${topItem.item_name}" sales are up ${topItem.growth.toFixed(1)}% from yesterday!`);
-        }
-      }
-
-      const fastMovingItems = itemsArray.filter(item => item.growth > 50);
-      if (fastMovingItems.length > 0) {
-        newInsights.push(`🚀 ${fastMovingItems.length} items showing strong growth today`);
-      }
-
-      if (categoriesArray.length > 0) {
-        const topCategory = categoriesArray[0];
-        newInsights.push(`💡 "${topCategory.category}" category leads with ₹${topCategory.revenue.toFixed(2)} revenue`);
-      }
-
-      setPopularItems(itemsArray);
-      setCategoryData(categoriesArray);
-      setInsights(newInsights);
-      
-    } catch (error: any) {
-      console.error('Error fetching popular items:', error);
+      setCategoryData(cats);
+    } catch (e) {
+      console.error('Error fetching items:', e);
+      setPopularItems([]); setAllItems([]); setCategoryData([]);
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) {
-    return <div className="text-center py-8">Loading popular items...</div>;
-  }
+  const colorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    categoryData.forEach((c) => map.set(c.category, c.color));
+    return map;
+  }, [categoryData]);
+
+  // quick picks
+  const today = () => {
+    const d = new Date();
+    const s = d.toISOString().split('T')[0];
+    setStartDate(s); setEndDate(s);
+    fetchData({ start: s, end: s });
+  };
+  const yesterday = () => {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    const s = d.toISOString().split('T')[0];
+    setStartDate(s); setEndDate(s);
+    fetchData({ start: s, end: s });
+  };
+  const last7 = () => {
+    const end = new Date();
+    const start = new Date(); start.setDate(start.getDate() - 6);
+    const s = start.toISOString().split('T')[0];
+    const e = end.toISOString().split('T')[0];
+    setStartDate(s); setEndDate(e);
+    fetchData({ start: s, end: e });
+  };
+  const thisMonth = () => {
+    const end = new Date();
+    const start = new Date(end.getFullYear(), end.getMonth(), 1);
+    const s = start.toISOString().split('T')[0];
+    const e = end.toISOString().split('T')[0];
+    setStartDate(s); setEndDate(e);
+    fetchData({ start: s, end: e });
+  };
+  const clearRange = () => {
+    setStartDate(''); setEndDate('');
+    fetchData();
+  };
+
+  if (loading) return <div className="text-center py-8">Loading popular items...</div>;
 
   return (
     <div className="space-y-6">
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Category Distribution */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Coffee className="h-5 w-5" />
-              Sales by Category
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[300px] flex items-center justify-center">
+      {/* Date Range Controls */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">Filter by Date</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">From</div>
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="w-[180px]" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">To</div>
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="w-[180px]" />
+            </div>
+            <Button
+              onClick={() => fetchData({ start: startDate || undefined, end: endDate || undefined })}
+              disabled={!startDate && !endDate}
+            >
+              Apply
+            </Button>
+            <div className="flex flex-wrap gap-2 ml-auto">
+              <Button variant="outline" size="sm" onClick={today}>Today</Button>
+              <Button variant="outline" size="sm" onClick={yesterday}>Yesterday</Button>
+              <Button variant="outline" size="sm" onClick={last7}>Last 7 days</Button>
+              <Button variant="outline" size="sm" onClick={thisMonth}>This month</Button>
+              <Button variant="ghost" size="sm" onClick={clearRange}>All time</Button>
+            </div>
+          </div>
+          {(startDate || endDate) && (
+            <div className="mt-3 text-sm text-muted-foreground">
+              Showing results {startDate ? `from ${startDate}` : 'from start'} {endDate ? `to ${endDate}` : 'to now'}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Pie + side summary table */}
+      <Card className="max-w-5xl mx-auto">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 justify-center">
+            <Coffee className="h-5 w-5" />
+            Sales by Category {startDate || endDate ? '(Selected Range)' : '(Till Date)'}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+            {/* Pie chart (2/3 width on md+) */}
+            <div className="md:col-span-2 h-[340px]">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -237,87 +320,132 @@ export function PopularItemsLive() {
                     nameKey="category"
                     cx="50%"
                     cy="50%"
-                    outerRadius={100}
-                    innerRadius={60}
-                    paddingAngle={5}
-                    label={({ percentage }) => `${percentage.toFixed(1)}%`}
+                    outerRadius={120}
+                    innerRadius={78}
+                    paddingAngle={3}
                     labelLine={false}
+                    // keep slices clean; labels shown via tooltip on hover
                   >
-                    {categoryData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    {categoryData.map((entry, i) => (
+                      <Cell key={`cell-${i}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <ChartTooltip />
+                  <Tooltip
+                    // show category name + rupee value + percent
+                    formatter={(value: number, name: string, props: any) => {
+                      const total = categoryData.reduce((s, c) => s + c.revenue, 0);
+                      const pct = total ? ((Number(value) / total) * 100).toFixed(1) : '0.0';
+                      return [`₹${Number(value).toFixed(2)} • ${pct}%`, name]; // name == category
+                    }}
+                  />
                 </PieChart>
               </ResponsiveContainer>
             </div>
-          </CardContent>
-        </Card>
-      </div>
 
-      {/* Detailed Items List */}
+            {/* Side table (1/3 width) */}
+            <div className="md:col-span-1">
+              <div className="rounded-md border overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/40">
+                    <tr>
+                      <th className="text-left p-2 font-medium">Category</th>
+                      <th className="text-right p-2 font-medium">Revenue</th>
+                      <th className="text-right p-2 font-medium">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {categoryData.map((c) => (
+                      <tr key={c.category} className="border-t">
+                        <td className="p-2">
+                          <div className="flex items-center gap-2">
+                            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: c.color }} />
+                            {c.category}
+                          </div>
+                        </td>
+                        <td className="p-2 text-right">₹{c.revenue.toFixed(2)}</td>
+                        <td className="p-2 text-right">{c.percentage.toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                    {categoryData.length === 0 && (
+                      <tr>
+                        <td className="p-3 text-center text-muted-foreground" colSpan={3}>
+                          No data for this range.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {/* optional: small footnote with item counts per category */}
+              {/* <div className="mt-2 text-xs text-muted-foreground">
+                {categoryData.map(c => `${c.category}: ${c.items} items`).join(' • ')}
+              </div> */}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Items Table */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5" />
-            Detailed Performance
+            <Award className="h-5 w-5" />
+            {startDate || endDate ? 'Items (Selected Range)' : 'All Items (Till Date)'}
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Category Legend */}
-          <div className="flex flex-wrap gap-3 mb-4">
-            {categoryData.map((category) => (
-              <div key={category.category} className="flex items-center gap-2">
-                <div 
-                  className="w-4 h-4 rounded-full" 
-                  style={{ backgroundColor: category.color }}
-                />
-                <span className="text-sm">
-                  {category.category} ({category.percentage.toFixed(1)}%)
-                </span>
-              </div>
-            ))}
-          </div>
-          
-          {/* Items List */}
-          <div className="space-y-3">
-            {popularItems.map((item, index) => {
-              const category = categoryData.find(c => c.category === item.category) || categoryData[0];
-              const categoryColor = category?.color || 'hsl(var(--primary))';
-              
-              return (
-                <div key={item.item_name} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-primary/10 rounded-full flex items-center justify-center">
-                      <span className="text-sm font-bold text-primary">#{index + 1}</span>
-                    </div>
-                    <div>
-                      <span className="font-medium">{item.item_name}</span>
-                      <div className="text-xs text-muted-foreground flex items-center gap-1">
-                        <div 
-                          className="w-2 h-2 rounded-full" 
-                          style={{ backgroundColor: categoryColor }}
-                        />
-                        {item.category} • {item.percentage.toFixed(1)}% of sales
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-bold">{item.total_quantity} sold</div>
-                    <div className="text-xs text-muted-foreground">
-                    </div>
-                    {item.growth !== 0 && (
-                      <Badge 
-                        variant="outline" 
-                        className={item.growth > 0 ? 'text-success' : 'text-destructive'}
-                      >
-                        {item.growth > 0 ? '+' : ''}{item.growth.toFixed(1)}%
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="overflow-x-auto rounded-md border">
+            <table className="min-w-full text-sm">
+              <thead className="bg-muted/40">
+                <tr>
+                  <th className="text-left p-3 font-medium">Item</th>
+                  <th className="text-left p-3 font-medium">Category</th>
+                  <th className="text-right p-3 font-medium">Total Sold</th>
+                  <th className="text-right p-3 font-medium">Revenue (₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allItems.map((item) => {
+                  const color = colorMap.get(item.category) || 'hsl(var(--primary))';
+                  return (
+                    <tr key={item.item_name} className="border-t">
+                      <td className="p-3">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                          <span className="font-medium">{item.item_name}</span>
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <Badge variant="outline" style={{ borderColor: color, color }}>
+                          {item.category}
+                        </Badge>
+                      </td>
+                      <td className="p-3 text-right">{item.total_quantity}</td>
+                      <td className="p-3 text-right">₹{item.total_revenue.toFixed(2)}</td>
+                    </tr>
+                  );
+                })}
+                {allItems.length === 0 && (
+                  <tr>
+                    <td className="p-4 text-center text-muted-foreground" colSpan={4}>
+                      No items found for this range.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="bg-muted/30">
+                  <td className="p-3 font-semibold">Totals</td>
+                  <td className="p-3"></td>
+                  <td className="p-3 text-right font-semibold">
+                    {allItems.reduce((s, v) => s + v.total_quantity, 0)}
+                  </td>
+                  <td className="p-3 text-right font-semibold">
+                    ₹{allItems.reduce((s, v) => s + v.total_revenue, 0).toFixed(2)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
         </CardContent>
       </Card>
