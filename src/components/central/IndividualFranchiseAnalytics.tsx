@@ -8,6 +8,9 @@ import { supabase } from '@/integrations/supabase/client';
 
 interface IndividualFranchiseAnalyticsProps {
   franchiseId: string;
+  /** Optional UTC ISO bounds (inclusive). When provided, filters sales distribution to this range. */
+  startISO?: string;
+  endISO?: string;
 }
 
 interface PopularItem {
@@ -24,53 +27,90 @@ type RawRow = {
   menu_item_id: number | null;
 };
 
-export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchiseAnalyticsProps) {
+export function IndividualFranchiseAnalytics({
+  franchiseId,
+  startISO,
+  endISO,
+}: IndividualFranchiseAnalyticsProps) {
   const [popularItems, setPopularItems] = useState<PopularItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (franchiseId) {
-      fetchFranchiseItems();
-    }
+    if (!franchiseId) return;
+    fetchFranchiseItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [franchiseId]);
+  }, [franchiseId, startISO, endISO]);
 
-  // Fetch all bill items with pagination
-  const fetchAllFranchiseRows = async (franchiseId: string): Promise<RawRow[]> => {
+  /** Chunk helper for .in() queries */
+  const chunk = <T,>(arr: T[], size = 1000): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
+
+  /** Get bill IDs (bills_generated_billing) in date range for the franchise */
+  const fetchBillIds = async (
+    fid: string,
+    start?: string,
+    end?: string
+  ): Promise<number[]> => {
     const pageSize = 1000;
     let from = 0;
-    const all: RawRow[] = [];
+    const ids: number[] = [];
 
     while (true) {
       const to = from + pageSize - 1;
-      const { data, error } = await supabase
-        .from('bill_items_generated_billing')
-        .select('item_name, qty, menu_item_id')
-        .eq('franchise_id', franchiseId)
+
+      let q = supabase
+        .from('bills_generated_billing')
+        .select('id')
+        .eq('franchise_id', fid)
+        .order('id', { ascending: true })
         .range(from, to);
 
+      if (start) q = q.gte('created_at', start);
+      if (end) q = q.lte('created_at', end);
+
+      const { data, error } = await q;
       if (error) throw error;
       if (!data || data.length === 0) break;
 
-      all.push(...(data as RawRow[]));
+      ids.push(...data.map((r: { id: number }) => r.id));
       if (data.length < pageSize) break;
       from += pageSize;
     }
 
+    return ids;
+  };
+
+  /** Fetch all item rows for a set of bill IDs */
+  const fetchItemsByBillIds = async (billIds: number[]): Promise<RawRow[]> => {
+    if (billIds.length === 0) return [];
+    const batches = chunk(billIds, 1000);
+    const all: RawRow[] = [];
+    for (const batch of batches) {
+      const { data, error } = await supabase
+        .from('bill_items_generated_billing')
+        .select('item_name, qty, menu_item_id')
+        .in('bill_id', batch);
+
+      if (error) throw error;
+      all.push(...((data as RawRow[]) ?? []));
+    }
     return all;
   };
 
-  // Fetch all menu items for the franchise
-  const fetchMenuPrices = async (franchiseId: string): Promise<Record<number, number>> => {
+  // Fetch all menu items for the franchise (price map)
+  const fetchMenuPrices = async (fid: string): Promise<Record<number, number>> => {
     const { data, error } = await supabase
       .from('menu_items')
       .select('id, price')
-      .eq('franchise_id', franchiseId);
+      .eq('franchise_id', fid);
 
     if (error) throw error;
 
     const priceMap: Record<number, number> = {};
-    (data || []).forEach((item) => {
+    (data || []).forEach((item: any) => {
       priceMap[item.id] = Number(item.price) || 0;
     });
     return priceMap;
@@ -79,10 +119,14 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
   const fetchFranchiseItems = async () => {
     setLoading(true);
     try {
-      const [rows, menuPriceMap] = await Promise.all([
-        fetchAllFranchiseRows(franchiseId),
-        fetchMenuPrices(franchiseId),
-      ]);
+      // 1) Get bill ids for the (optional) range
+      const billIds = await fetchBillIds(franchiseId, startISO, endISO);
+
+      // 2) Fetch items for those bills
+      const rows = await fetchItemsByBillIds(billIds);
+
+      // 3) Get price map
+      const menuPriceMap = await fetchMenuPrices(franchiseId);
 
       if (!rows || rows.length === 0) {
         setPopularItems([]);
@@ -97,7 +141,7 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
           if (!name) return acc;
 
           const qty = Number(raw.qty) || 0;
-          const menuPrice = menuPriceMap[raw.menu_item_id || 0] || 0;
+          const menuPrice = raw.menu_item_id ? (menuPriceMap[raw.menu_item_id] || 0) : 0;
 
           if (!acc[name]) {
             acc[name] = { qty: 0, revenue: 0, menuPrice };
@@ -148,7 +192,7 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
               <CardHeader>
                 <CardTitle className="flex items-center justify-center gap-2">
                   <Zap className="h-5 w-5" />
-                  Sales Distribution
+                  Sales Distribution{startISO && endISO ? ' (Filtered)' : ''}
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -181,7 +225,9 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
                     </ResponsiveContainer>
                   </div>
                 ) : (
-                  <p className="text-center text-gray-500 py-8">No data available.</p>
+                  <p className="text-center text-gray-500 py-8">
+                    {startISO && endISO ? 'No data for the selected range.' : 'No data available.'}
+                  </p>
                 )}
               </CardContent>
             </Card>
@@ -189,7 +235,7 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
             {/* Table */}
             <Card className="w-full max-w-3xl">
               <CardHeader>
-                <CardTitle>Item Details</CardTitle>
+                <CardTitle>Item Details{startISO && endISO ? ' (Filtered)' : ''}</CardTitle>
               </CardHeader>
               <CardContent>
                 {popularItems.length > 0 ? (
@@ -221,7 +267,9 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
                     </tbody>
                   </table>
                 ) : (
-                  <p className="text-center text-gray-500 py-4">No items found.</p>
+                  <p className="text-center text-gray-500 py-4">
+                    {startISO && endISO ? 'No items found for the selected dates.' : 'No items found.'}
+                  </p>
                 )}
               </CardContent>
             </Card>
@@ -231,4 +279,3 @@ export function IndividualFranchiseAnalytics({ franchiseId }: IndividualFranchis
     </div>
   );
 }
-  

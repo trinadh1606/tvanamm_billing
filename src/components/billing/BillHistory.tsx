@@ -46,7 +46,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   const { toast } = useToast();
 
   useEffect(() => {
-    fetchBills();
+    fetchBills(); // initial load
     if (isCentral) fetchFranchiseList();
   }, [franchiseId, role]);
 
@@ -61,20 +61,28 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         .select('franchise_id')
         .order('franchise_id');
 
-      if (error) throw error;
+    if (error) throw error;
 
-      const unique = Array.from(new Set(data?.map((item) => item.franchise_id)));
+      const unique = Array.from(new Set(data?.map((item) => item.franchise_id))).filter(Boolean);
       setFranchiseList(unique);
     } catch (error) {
       console.error('Error fetching franchise list:', error);
     }
   };
 
-  const fetchBills = async () => {
+  // accept optional targetFranchise to fetch exactly that franchise from DB
+  const fetchBills = async (targetFranchise?: string) => {
     setLoading(true);
     try {
       let query = supabase.from('bills_generated_billing').select('*');
-      if (!isCentral && franchiseId) query = query.eq('franchise_id', franchiseId);
+
+      if (isCentral) {
+        if (targetFranchise && targetFranchise !== 'ALL') {
+          query = query.eq('franchise_id', targetFranchise);
+        }
+      } else if (franchiseId) {
+        query = query.eq('franchise_id', franchiseId);
+      }
 
       const { data, error } = await query.order('created_at', { ascending: false }).limit(1000);
       if (error) throw error;
@@ -153,8 +161,33 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     setCurrentPage(1);
   };
 
+  // EXPORT ONLY THE SELECTED FRANCHISE (when central)
   const exportToExcel = () => {
-    const exportData = filteredBills.map((bill) => ({
+    // If central view and "ALL" is selected, ask user to pick a franchise to ensure exporting only that franchise
+    if (isCentral && selectedFranchise === 'ALL') {
+      toast({
+        title: 'Select a franchise',
+        description: 'Please choose a franchise from the dropdown to export its bills only.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Source to export: filteredBills already respects franchise/date filters.
+    const exportSource =
+      isCentral && selectedFranchise !== 'ALL'
+        ? filteredBills.filter((b) => b.franchise_id === selectedFranchise)
+        : filteredBills;
+
+    if (exportSource.length === 0) {
+      toast({
+        title: 'Nothing to export',
+        description: 'No bills match your current filters.',
+      });
+      return;
+    }
+
+    const exportData = exportSource.map((bill) => ({
       'Bill ID': bill.id,
       'Franchise ID': bill.franchise_id,
       'Payment Mode': bill.mode_payment.toUpperCase(),
@@ -169,7 +202,9 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Bills History');
 
     let filename = 'bills-history';
-    if (selectedFranchise !== 'ALL') filename += `-${selectedFranchise}`;
+    // Ensure the filename reflects the selected franchise explicitly
+    if (isCentral && selectedFranchise !== 'ALL') filename += `-${selectedFranchise}`;
+    if (!isCentral && franchiseId) filename += `-${franchiseId}`;
     if (fromDate && toDate) {
       filename += `-${format(fromDate, 'yyyy-MM-dd')}_to_${format(toDate, 'yyyy-MM-dd')}`;
     }
@@ -179,7 +214,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
     toast({
       title: 'Export Successful',
-      description: `${filteredBills.length} bills exported to Excel`,
+      description: `${exportSource.length} bills exported to Excel`,
     });
   };
 
@@ -215,11 +250,49 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         <CardTitle className="flex items-center gap-2">
           <Calendar className="h-5 w-5" style={{ color: 'rgb(0, 100, 55)' }} />
           <span style={{ color: 'rgb(0, 100, 55)' }}>Bill History</span>
-          {isCentral && <Badge variant="outline" style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}>All Franchises</Badge>}
+          {isCentral && (
+            <Badge
+              variant="outline"
+              style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}
+            >
+              All Franchises
+            </Badge>
+          )}
         </CardTitle>
       </CardHeader>
 
       <CardContent className="bg-white">
+        {/* FILTER BAR: Franchise selector + Get Bills */}
+        {isCentral && (
+          <div className="mt-6 sm:mt-8 flex flex-wrap items-center gap-3 mb-4">
+            <label className="text-sm font-medium" style={{ color: 'rgb(0, 100, 55)' }}>
+              Franchise
+            </label>
+            <select
+              value={selectedFranchise}
+              onChange={(e) => setSelectedFranchise(e.target.value)}
+              className="px-3 py-2 rounded-md border text-sm focus:outline-none focus:ring-2"
+              style={{ borderColor: 'rgba(0, 100, 55, 0.3)', color: 'rgb(0, 100, 55)' }}
+            >
+              <option value="ALL">ALL</option>
+              {franchiseList.map((fid) => (
+                <option key={fid} value={fid}>
+                  {fid}
+                </option>
+              ))}
+            </select>
+
+            <Button
+              onClick={() => fetchBills(selectedFranchise)}
+              disabled={loading}
+              className="ml-1"
+              style={{ backgroundColor: 'rgb(0, 100, 55)' }}
+            >
+              Get Bills
+            </Button>
+          </div>
+        )}
+
         {loading ? (
           <div className="text-center py-8">Loading bills...</div>
         ) : filteredBills.length === 0 ? (
@@ -228,43 +301,43 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           <div className="space-y-4">
             <div className="overflow-x-auto w-full">
               <div className={`${gridCols} gap-4 p-4 bg-gray-50 rounded-lg font-medium min-w-[600px]`}>
-                <Button 
-                  variant="ghost" 
-                  onClick={() => handleSort('id')} 
+                <Button
+                  variant="ghost"
+                  onClick={() => handleSort('id')}
                   className="justify-start h-auto p-0"
                   style={{ color: 'rgb(0, 100, 55)' }}
                 >
                   Bill ID <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
                 {isCentral && (
-                  <Button 
-                    variant="ghost" 
-                    onClick={() => handleSort('franchise_id')} 
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleSort('franchise_id')}
                     className="justify-start h-auto p-0"
                     style={{ color: 'rgb(0, 100, 55)' }}
                   >
                     Franchise <ArrowUpDown className="ml-1 h-3 w-3" />
                   </Button>
                 )}
-                <Button 
-                  variant="ghost" 
-                  onClick={() => handleSort('mode_payment')} 
+                <Button
+                  variant="ghost"
+                  onClick={() => handleSort('mode_payment')}
                   className="justify-start h-auto p-0"
                   style={{ color: 'rgb(0, 100, 55)' }}
                 >
                   Payment Mode <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
-                <Button 
-                  variant="ghost" 
-                  onClick={() => handleSort('total')} 
+                <Button
+                  variant="ghost"
+                  onClick={() => handleSort('total')}
                   className="justify-start h-auto p-0"
                   style={{ color: 'rgb(0, 100, 55)' }}
                 >
                   Amount <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
-                <Button 
-                  variant="ghost" 
-                  onClick={() => handleSort('created_at')} 
+                <Button
+                  variant="ghost"
+                  onClick={() => handleSort('created_at')}
                   className="justify-start h-auto p-0 sm:col-span-2"
                   style={{ color: 'rgb(0, 100, 55)' }}
                 >
@@ -276,8 +349,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
             <div className="overflow-x-auto w-full">
               <div className="space-y-2 min-w-[600px]">
                 {currentBills.map((bill) => (
-                  <div 
-                    key={bill.id} 
+                  <div
+                    key={bill.id}
                     className={`${gridCols} gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors text-sm sm:text-base`}
                   >
                     <div className="break-words min-w-0">
@@ -292,8 +365,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                     </div>
                     {isCentral && (
                       <div className="break-words min-w-0">
-                        <Badge 
-                          variant="outline" 
+                        <Badge
+                          variant="outline"
                           className="w-fit"
                           style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}
                         >
@@ -302,19 +375,22 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                       </div>
                     )}
                     <div className="break-words min-w-0">
-                      <Badge 
+                      <Badge
                         variant={getPaymentBadgeVariant(bill.mode_payment)}
-                        style={{ 
+                        style={{
                           backgroundColor: bill.mode_payment?.toLowerCase() === 'cash' ? 'rgb(0, 100, 55)' : undefined,
-                          color: bill.mode_payment?.toLowerCase() === 'cash' ? 'white' : 'rgb(0, 100, 55)'
+                          color: bill.mode_payment?.toLowerCase() === 'cash' ? 'white' : 'rgb(0, 100, 55)',
                         }}
                       >
                         {bill.mode_payment?.toUpperCase()}
                       </Badge>
                     </div>
-                    <div className="font-bold break-words min-w-0" style={{ color: 'rgb(0, 100, 55)' }}>₹{Number(bill.total).toFixed(2)}</div>
+                    <div className="font-bold break-words min-w-0" style={{ color: 'rgb(0, 100, 55)' }}>
+                      ₹{Number(bill.total).toFixed(2)}
+                    </div>
                     <div className="text-sm text-gray-600 sm:col-span-2 break-words min-w-0">
-                      {new Date(bill.created_at).toLocaleDateString()}<br />
+                      {new Date(bill.created_at).toLocaleDateString()}
+                      <br />
                       <span className="text-xs">{new Date(bill.created_at).toLocaleTimeString()}</span>
                     </div>
                   </div>
@@ -328,20 +404,22 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                   Showing {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredBills.length)} of {filteredBills.length}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => setCurrentPage(currentPage - 1)} 
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(currentPage - 1)}
                     disabled={currentPage === 1}
                     style={{ borderColor: 'rgb(0, 100, 55)', color: 'rgb(0, 100, 55)' }}
                   >
                     <ChevronLeft className="h-4 w-4" /> Previous
                   </Button>
-                  <span className="text-sm" style={{ color: 'rgb(0, 100, 55)' }}>Page {currentPage} of {totalPages}</span>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => setCurrentPage(currentPage + 1)} 
+                  <span className="text-sm" style={{ color: 'rgb(0, 100, 55)' }}>
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     style={{ borderColor: 'rgb(0, 100, 55)', color: 'rgb(0, 100, 55)' }}
                   >
@@ -352,10 +430,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
             )}
 
             <div className="flex justify-end pt-4">
-              <Button 
-                onClick={exportToExcel}
-                style={{ backgroundColor: 'rgb(0, 100, 55)' }}
-              >
+              <Button onClick={exportToExcel} style={{ backgroundColor: 'rgb(0, 100, 55)' }}>
                 <Download className="h-4 w-4 mr-2" /> Export to Excel
               </Button>
             </div>
@@ -365,7 +440,9 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         {selectedBillId !== null && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
             <div className="bg-white p-6 rounded-lg max-w-lg w-full shadow-lg relative">
-              <h2 className="text-xl font-bold mb-2" style={{ color: 'rgb(0, 100, 55)' }}>Items for Bill #{selectedBillId}</h2>
+              <h2 className="text-xl font-bold mb-2" style={{ color: 'rgb(0, 100, 55)' }}>
+                Items for Bill #{selectedBillId}
+              </h2>
               <Button
                 className="absolute top-2 right-2"
                 size="sm"
@@ -388,7 +465,9 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                   <ul className="space-y-2 mt-4 max-h-64 overflow-y-auto">
                     {billItems.map((item, index) => (
                       <li key={index} className="border p-2 rounded">
-                        <div className="font-medium" style={{ color: 'rgb(0, 100, 55)' }}>{item.item_name}</div>
+                        <div className="font-medium" style={{ color: 'rgb(0, 100, 55)' }}>
+                          {item.item_name}
+                        </div>
                         <div className="text-sm text-gray-600">
                           Quantity: {item.qty} | Rate: ₹{item.price} | Total: ₹{(item.qty * item.price).toFixed(2)}
                         </div>
@@ -396,7 +475,10 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                     ))}
                   </ul>
                   <div className="mt-4 border-t pt-2 font-semibold text-right" style={{ color: 'rgb(0, 100, 55)' }}>
-                    Total Bill Amount: ₹{billItems.reduce((acc, item) => acc + Number(item.qty) * Number(item.price), 0).toFixed(2)}
+                    Total Bill Amount: ₹
+                    {billItems
+                      .reduce((acc, item) => acc + Number(item.qty) * Number(item.price), 0)
+                      .toFixed(2)}
                   </div>
                 </>
               )}
