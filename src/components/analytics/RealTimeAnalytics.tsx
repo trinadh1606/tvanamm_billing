@@ -221,21 +221,29 @@ export function RealTimeAnalytics() {
         </CardContent>
       </Card>
 
-
       {/* Recent Activity Feed */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2">
             <AlertCircle className="h-5 w-5" />
             Live Activity Feed
           </CardTitle>
+
+          {/* NEW: total orders today indicator */}
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-primary" />
+            <Badge variant="secondary" className="text-sm">
+              Total Orders Today: <span className="ml-1 font-semibold">{liveStats.todayOrders}</span>
+            </Badge>
+          </div>
         </CardHeader>
+
         <CardContent>
           {recentActivity.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">No recent activity</div>
           ) : (
             <div className="space-y-3">
-              {recentActivity.map((activity, index) => (
+              {recentActivity.map((activity) => (
                 <div key={activity.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                   <div className="flex items-center gap-3">
                     <div className="w-2 h-2 bg-success rounded-full"></div>
