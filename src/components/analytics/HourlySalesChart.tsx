@@ -338,8 +338,6 @@ export function HourlySalesChart() {
                           name="revenue"
                           radius={[6, 6, 0, 0]}
                           barSize={32} // Increased bar size for better visibility
-                          barGap={0} // No gap between bars in same category
-                          barCategoryGap="40%" // Reduced gap between categories for better spacing
                         >
                           {hourlyData.map((d, i) => {
                             const fill = d.isCurrentHour
