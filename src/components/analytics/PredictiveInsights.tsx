@@ -358,8 +358,7 @@ export function PredictiveInsights() {
             </table>
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            Forecasts are based on all your available sales data up to today. “Trend confidence (R²)” shows how well the
-            trend fits your past data (0 = weak, 1 = strong). Numbers are estimates and never go below zero.
+            Forecasts are based on all your available sales data up to today. 
           </p>
         </div>
       </CardContent>

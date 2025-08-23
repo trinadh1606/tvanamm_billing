@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -17,17 +17,16 @@ import {
   Tooltip,
   Legend,
   CartesianGrid,
-  Brush,
   ReferenceLine,
   Cell,
 } from 'recharts';
 import { Clock, TrendingUp, TrendingDown } from 'lucide-react';
 
 interface HourlyData {
-  hour: string;            // "00".."23"
+  hour: string;
   revenue: number;
   orders: number;
-  displayHour: string;     // "12:00 AM" etc
+  displayHour: string;
   isPeakHour: boolean;
   isCurrentHour: boolean;
 }
@@ -45,10 +44,10 @@ const inr = new Intl.NumberFormat('en-IN', {
 });
 
 const formatHour = (hour: number): string => {
-  if (hour === 0) return '12:00 AM';
-  if (hour === 12) return '12:00 PM';
-  if (hour < 12) return `${hour}:00 AM`;
-  return `${hour - 12}:00 PM`;
+  if (hour === 0) return '12 AM';
+  if (hour === 12) return '12 PM';
+  if (hour < 12) return `${hour} AM`;
+  return `${hour - 12} PM`;
 };
 
 function getDayBoundsISO(now = new Date()) {
@@ -67,16 +66,6 @@ export function HourlySalesChart() {
   const [error, setError] = useState<string | null>(null);
 
   const { franchiseId } = useAuth();
-
-  // --- NEW: scroll container ref + auto-scroll to right (latest hour) ---
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!hourlyData.length) return;
-    // Scroll to the rightmost end so users see the latest hours
-    const el = scrollRef.current;
-    if (el) el.scrollLeft = el.scrollWidth;
-  }, [hourlyData]);
 
   useEffect(() => {
     fetchHourlyData();
@@ -180,7 +169,7 @@ export function HourlySalesChart() {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-destructive">Couldn’t load analytics</CardTitle>
+          <CardTitle className="text-destructive">Couldn't load analytics</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">{error}</CardContent>
       </Card>
@@ -189,10 +178,9 @@ export function HourlySalesChart() {
 
   const hasData = hourlyData.some(d => d.revenue > 0 || d.orders > 0);
 
-  // --- NEW: dynamic inner width so it feels spacious & scrollable ---
-  // Increase this to make the bars "breathe" more.
-  const PX_PER_HOUR = 72; // 72px per hour => ~1728px total for 24h
-  const minInnerWidth = Math.max(960, hourlyData.length * PX_PER_HOUR);
+  // Increased spacing between columns
+  const PX_PER_HOUR = 80; // Reduced from 240 to allow more natural spacing
+  const minInnerWidth = Math.max(1200, hourlyData.length * PX_PER_HOUR);
 
   return (
     <div className="space-y-6">
@@ -243,28 +231,26 @@ export function HourlySalesChart() {
         </Badge>
       </div>
 
-      {/* Chart */}
+      {/* Chart with improved spacing */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Clock className="h-5 w-5" />
-            Today’s Hourly Sales
+            Today's Hourly Sales
           </CardTitle>
         </CardHeader>
         <CardContent>
           {!hasData ? (
             <div className="text-sm text-muted-foreground py-8">No bills for today yet.</div>
           ) : (
-            // --- NEW: scrollable container that auto-scrolls to the right ---
-            <div ref={scrollRef} className="overflow-x-auto">
+            <div className="overflow-x-auto pb-2">
               <div style={{ minWidth: minInnerWidth }}>
-                <ChartContainer config={chartConfig} className="h-[460px]">
+                <ChartContainer config={chartConfig} className="h-[520px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart
                       data={hourlyData}
-                      margin={{ left: 16, right: 32, top: 12, bottom: 20 }}
+                      margin={{ left: 24, right: 40, top: 18, bottom: 60 }} // Increased bottom margin
                     >
-                      {/* defs for striped peak bars + gradient for current hour */}
                       <defs>
                         <pattern id="stripe" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
                           <rect width="3" height="6" fill="hsl(var(--primary))" />
@@ -276,20 +262,26 @@ export function HourlySalesChart() {
                       </defs>
 
                       <CartesianGrid strokeDasharray="3 3" vertical={false} />
+
+                      {/* X-axis with better spacing */}
                       <XAxis
                         dataKey="displayHour"
                         stroke="hsl(var(--muted-foreground))"
                         tick={{ fontSize: 12 }}
-                        tickMargin={12}
+                        tickMargin={20} // Reduced tick margin
                         tickLine={false}
                         axisLine={false}
                         interval={0}
-                        height={42}
-                        padding={{ left: 12, right: 12 }}
+                        height={60}
+                        angle={-45} // Angle labels to prevent overlapping
+                        textAnchor="end"
+                        padding={{ left: 20, right: 20 }}
                       />
-                      {/* Left axis: revenue */}
+
+                      {/* Y-axes */}
                       <YAxis
                         yAxisId="left"
+                        width={92}
                         stroke="hsl(var(--muted-foreground))"
                         tick={{ fontSize: 12 }}
                         tickLine={false}
@@ -297,9 +289,9 @@ export function HourlySalesChart() {
                         tickFormatter={(v) => inr.format(Math.round(v))}
                         hide={!showRevenue}
                       />
-                      {/* Right axis: orders */}
                       <YAxis
                         yAxisId="right"
+                        width={70}
                         orientation="right"
                         stroke="hsl(var(--muted-foreground))"
                         tick={{ fontSize: 12 }}
@@ -309,7 +301,6 @@ export function HourlySalesChart() {
                         hide={!showOrders}
                       />
 
-                      {/* Average revenue line */}
                       {showRevenue && avgRevenue > 0 && (
                         <ReferenceLine
                           yAxisId="left"
@@ -340,16 +331,15 @@ export function HourlySalesChart() {
                       />
                       <Legend />
 
-                      {/* Revenue bars — with bigger gaps & size for spacious look */}
                       {showRevenue && (
                         <Bar
                           yAxisId="left"
                           dataKey="revenue"
                           name="revenue"
-                          radius={[5, 5, 0, 0]}
-                          barSize={28}
-                          barGap={8}
-                          barCategoryGap="45%"
+                          radius={[6, 6, 0, 0]}
+                          barSize={32} // Increased bar size for better visibility
+                          barGap={0} // No gap between bars in same category
+                          barCategoryGap="40%" // Reduced gap between categories for better spacing
                         >
                           {hourlyData.map((d, i) => {
                             const fill = d.isCurrentHour
@@ -357,13 +347,11 @@ export function HourlySalesChart() {
                               : d.isPeakHour
                               ? 'url(#stripe)'
                               : 'hsl(var(--primary))';
-                            const opacity = d.isPeakHour || d.isCurrentHour ? 1 : 0.9;
-                            return <Cell key={i} fill={fill} opacity={opacity} />;
+                            return <Cell key={i} fill={fill} opacity={d.isPeakHour || d.isCurrentHour ? 1 : 0.9} />;
                           })}
                         </Bar>
                       )}
 
-                      {/* Orders line */}
                       {showOrders && (
                         <Line
                           yAxisId="right"
@@ -376,14 +364,6 @@ export function HourlySalesChart() {
                           activeDot={{ r: 6, stroke: 'hsl(var(--success))', strokeWidth: 2 }}
                         />
                       )}
-
-                      {/* Brush to focus a range */}
-                      <Brush
-                        dataKey="displayHour"
-                        height={28}
-                        travellerWidth={10}
-                        stroke="hsl(var(--muted-foreground))"
-                      />
                     </ComposedChart>
                   </ResponsiveContainer>
                 </ChartContainer>
@@ -393,7 +373,6 @@ export function HourlySalesChart() {
         </CardContent>
       </Card>
 
-      {/* Quick tips / insights */}
       {insights.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {insights.map((i, idx) => (
