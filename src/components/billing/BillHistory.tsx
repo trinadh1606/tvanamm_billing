@@ -12,7 +12,7 @@ import * as XLSX from 'xlsx';
 interface Bill {
   id: number;
   franchise_id: string;
-  mode_payment: string;
+  mode_payment: string | null;
   created_at: string;
   total: number;
   created_by: string;
@@ -32,8 +32,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   const [loading, setLoading] = useState(true);
   const [selectedFranchise, setSelectedFranchise] = useState<string>('ALL');
   const [franchiseList, setFranchiseList] = useState<string[]>([]);
-  const [fromDate, setFromDate] = useState<Date>();
-  const [toDate, setToDate] = useState<Date>();
+  const [fromDate, setFromDate] = useState<Date | undefined>();
+  const [toDate, setToDate] = useState<Date | undefined>();
   const [sortField, setSortField] = useState<SortField>('created_at');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
@@ -48,11 +48,27 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   useEffect(() => {
     fetchBills(); // initial load
     if (isCentral) fetchFranchiseList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [franchiseId, role]);
 
   useEffect(() => {
     applyFiltersAndSort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bills, selectedFranchise, fromDate, toDate, sortField, sortDirection]);
+
+  const toInputValue = (d?: Date) =>
+    d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
+
+  const startOfDayISO = (d: Date) => {
+    const x = new Date(d);
+    x.setHours(0, 0, 0, 0);
+    return x.toISOString();
+  };
+  const endOfDayISO = (d: Date) => {
+    const x = new Date(d);
+    x.setHours(23, 59, 59, 999);
+    return x.toISOString();
+  };
 
   const fetchFranchiseList = async () => {
     try {
@@ -61,21 +77,22 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         .select('franchise_id')
         .order('franchise_id');
 
-    if (error) throw error;
+      if (error) throw error;
 
-      const unique = Array.from(new Set(data?.map((item) => item.franchise_id))).filter(Boolean);
+      const unique = Array.from(new Set(data?.map((item) => item.franchise_id))).filter(Boolean) as string[];
       setFranchiseList(unique);
     } catch (error) {
       console.error('Error fetching franchise list:', error);
     }
   };
 
-  // accept optional targetFranchise to fetch exactly that franchise from DB
-  const fetchBills = async (targetFranchise?: string) => {
+  // accept optional targetFranchise and optional date range to fetch from DB
+  const fetchBills = async (targetFranchise?: string, from?: Date, to?: Date) => {
     setLoading(true);
     try {
       let query = supabase.from('bills_generated_billing').select('*');
 
+      // franchise filter
       if (isCentral) {
         if (targetFranchise && targetFranchise !== 'ALL') {
           query = query.eq('franchise_id', targetFranchise);
@@ -84,9 +101,16 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         query = query.eq('franchise_id', franchiseId);
       }
 
+      // date range filter (server-side) if both provided
+      if (from && to) {
+        query = query
+          .gte('created_at', startOfDayISO(from))
+          .lte('created_at', endOfDayISO(to));
+      }
+
       const { data, error } = await query.order('created_at', { ascending: false }).limit(1000);
       if (error) throw error;
-      setBills(data || []);
+      setBills((data as Bill[]) || []);
     } catch (error) {
       toast({
         title: 'Error',
@@ -128,14 +152,13 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
 
     if (fromDate) {
-      const fromStr = fromDate.toISOString();
-      filtered = filtered.filter((bill) => bill.created_at >= fromStr);
+      filtered = filtered.filter((bill) => new Date(bill.created_at) >= new Date(fromDate.setHours(0, 0, 0, 0)));
     }
 
     if (toDate) {
-      const toStr = new Date(toDate);
-      toStr.setHours(23, 59, 59, 999);
-      filtered = filtered.filter((bill) => new Date(bill.created_at) <= toStr);
+      const end = new Date(toDate);
+      end.setHours(23, 59, 59, 999);
+      filtered = filtered.filter((bill) => new Date(bill.created_at) <= end);
     }
 
     filtered.sort((a, b) => {
@@ -143,8 +166,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       let bVal: any = b[sortField];
 
       if (sortField === 'mode_payment') {
-        aVal = aVal?.toLowerCase();
-        bVal = bVal?.toLowerCase();
+        aVal = (aVal ?? '').toLowerCase();
+        bVal = (bVal ?? '').toLowerCase();
       } else if (sortField === 'total') {
         aVal = Number(aVal);
         bVal = Number(bVal);
@@ -163,7 +186,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
   // EXPORT ONLY THE SELECTED FRANCHISE (when central)
   const exportToExcel = () => {
-    // If central view and "ALL" is selected, ask user to pick a franchise to ensure exporting only that franchise
     if (isCentral && selectedFranchise === 'ALL') {
       toast({
         title: 'Select a franchise',
@@ -173,7 +195,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       return;
     }
 
-    // Source to export: filteredBills already respects franchise/date filters.
     const exportSource =
       isCentral && selectedFranchise !== 'ALL'
         ? filteredBills.filter((b) => b.franchise_id === selectedFranchise)
@@ -190,7 +211,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     const exportData = exportSource.map((bill) => ({
       'Bill ID': bill.id,
       'Franchise ID': bill.franchise_id,
-      'Payment Mode': bill.mode_payment.toUpperCase(),
+      'Payment Mode': (bill.mode_payment ?? '').toUpperCase(),
       'Total Amount (₹)': Number(bill.total).toFixed(2),
       'Created Date': new Date(bill.created_at).toLocaleDateString(),
       'Created Time': new Date(bill.created_at).toLocaleTimeString(),
@@ -202,7 +223,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Bills History');
 
     let filename = 'bills-history';
-    // Ensure the filename reflects the selected franchise explicitly
     if (isCentral && selectedFranchise !== 'ALL') filename += `-${selectedFranchise}`;
     if (!isCentral && franchiseId) filename += `-${franchiseId}`;
     if (fromDate && toDate) {
@@ -233,8 +253,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     currentPage * itemsPerPage
   );
 
-  const getPaymentBadgeVariant = (mode: string) => {
-    switch (mode?.toLowerCase()) {
+  const getPaymentBadgeVariant = (mode: string | null) => {
+    switch ((mode ?? '').toLowerCase()) {
       case 'cash': return 'default';
       case 'card': return 'secondary';
       case 'upi': return 'outline';
@@ -247,18 +267,72 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   return (
     <Card className="bg-white">
       <CardHeader className="border-b">
-        <CardTitle className="flex items-center gap-2">
-          <Calendar className="h-5 w-5" style={{ color: 'rgb(0, 100, 55)' }} />
-          <span style={{ color: 'rgb(0, 100, 55)' }}>Bill History</span>
-          {isCentral && (
-            <Badge
-              variant="outline"
-              style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}
-            >
-              All Franchises
-            </Badge>
-          )}
-        </CardTitle>
+        {/* Heading + Date Range on the right */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle className="flex items-center gap-2">
+            <Calendar className="h-5 w-5" style={{ color: 'rgb(0, 100, 55)' }} />
+            <span style={{ color: 'rgb(0, 100, 55)' }}>Bill History</span>
+            {isCentral && (
+              <Badge
+                variant="outline"
+                style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}
+              >
+                All Franchises
+              </Badge>
+            )}
+          </CardTitle>
+
+          {/* Date pickers beside the heading */}
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-col">
+              <label className="text-xs text-gray-600 mb-1">From</label>
+              <input
+                type="date"
+                value={toInputValue(fromDate)}
+                onChange={(e) => setFromDate(e.target.value ? new Date(`${e.target.value}T00:00:00`) : undefined)}
+                className="px-3 py-2 rounded-md border text-sm"
+                style={{ borderColor: 'rgba(0, 100, 55, 0.3)', color: 'rgb(0, 100, 55)' }}
+              />
+            </div>
+            <div className="flex flex-col">
+              <label className="text-xs text-gray-600 mb-1">To</label>
+              <input
+                type="date"
+                value={toInputValue(toDate)}
+                onChange={(e) => setToDate(e.target.value ? new Date(`${e.target.value}T00:00:00`) : undefined)}
+                className="px-3 py-2 rounded-md border text-sm"
+                style={{ borderColor: 'rgba(0, 100, 55, 0.3)', color: 'rgb(0, 100, 55)' }}
+              />
+            </div>
+
+            {/* Server-side fetch for this range (central mode) */}
+            {isCentral && (
+              <Button
+                onClick={() => fetchBills(selectedFranchise, fromDate, toDate)}
+                className="ml-1"
+                style={{ backgroundColor: 'rgb(0, 100, 55)' }}
+                disabled={loading}
+              >
+                Get Bills
+              </Button>
+            )}
+
+            {/* Quick clear */}
+            {(fromDate || toDate) && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setFromDate(undefined);
+                  setToDate(undefined);
+                }}
+                className="ml-1"
+                style={{ borderColor: 'rgb(0, 100, 55)', color: 'rgb(0, 100, 55)' }}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+        </div>
       </CardHeader>
 
       <CardContent className="bg-white">
@@ -283,7 +357,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
             </select>
 
             <Button
-              onClick={() => fetchBills(selectedFranchise)}
+              onClick={() => fetchBills(selectedFranchise, fromDate, toDate)}
               disabled={loading}
               className="ml-1"
               style={{ backgroundColor: 'rgb(0, 100, 55)' }}
@@ -378,11 +452,11 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                       <Badge
                         variant={getPaymentBadgeVariant(bill.mode_payment)}
                         style={{
-                          backgroundColor: bill.mode_payment?.toLowerCase() === 'cash' ? 'rgb(0, 100, 55)' : undefined,
-                          color: bill.mode_payment?.toLowerCase() === 'cash' ? 'white' : 'rgb(0, 100, 55)',
+                          backgroundColor: (bill.mode_payment ?? '').toLowerCase() === 'cash' ? 'rgb(0, 100, 55)' : undefined,
+                          color: (bill.mode_payment ?? '').toLowerCase() === 'cash' ? 'white' : 'rgb(0, 100, 55)',
                         }}
                       >
-                        {bill.mode_payment?.toUpperCase()}
+                        {(bill.mode_payment ?? '').toUpperCase()}
                       </Badge>
                     </div>
                     <div className="font-bold break-words min-w-0" style={{ color: 'rgb(0, 100, 55)' }}>
