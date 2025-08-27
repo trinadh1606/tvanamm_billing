@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { TrendingUp } from 'lucide-react';
+import { TrendingUp, AlertTriangle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { IndividualFranchiseAnalytics } from './IndividualFranchiseAnalytics';
 
@@ -60,7 +60,130 @@ export function FRCentralDashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('realtime');
 
-  // Build once so both summary + pie chart use identical bounds
+  // ---------- Data retention (for alert) ----------
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
+
+  // Count rows that would actually be deleted at the next purge
+  const [billsToDeleteCount, setBillsToDeleteCount] = useState<number | null>(null);
+  const [countLoading, setCountLoading] = useState(false);
+  const [countError, setCountError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        // Try DB setting first (optional)
+        const { data, error } = await supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'retention_days')
+          .maybeSingle();
+
+        if (!error && data?.value && !Number.isNaN(parseInt(data.value, 10))) {
+          setRetentionDays(parseInt(data.value, 10));
+          return;
+        }
+      } catch {
+        /* ignore and fallback to env/default */
+      }
+
+      // Env or default — DEFAULT TO 45 (not 90)
+      const fromEnvRaw = (import.meta as any)?.env?.VITE_DATA_RETENTION_DAYS ?? '';
+      const fromEnv = parseInt(fromEnvRaw, 10);
+      setRetentionDays(Number.isFinite(fromEnv) ? fromEnv : 45);
+    })();
+  }, []);
+
+  // ---------- Accurate purge schedule (IST semantics) ----------
+  const PURGE_HOUR_IST =
+    Number.isFinite(parseInt((import.meta as any)?.env?.VITE_PURGE_HOUR_IST ?? '', 10))
+      ? parseInt((import.meta as any)?.env?.VITE_PURGE_HOUR_IST, 10)
+      : 2; // set this to your actual cron hour (0-23)
+
+  // "Now" in IST as a Date
+  const nowIST = useMemo(
+    () => new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })),
+    []
+  );
+
+  // Next purge Date in IST at PURGE_HOUR_IST
+  const nextPurgeIST = useMemo(() => {
+    const d = new Date(nowIST);
+    d.setHours(PURGE_HOUR_IST, 0, 0, 0);
+    if (nowIST.getTime() >= d.getTime()) {
+      d.setDate(d.getDate() + 1); // already passed today's purge time → use tomorrow
+    }
+    return d;
+  }, [nowIST, PURGE_HOUR_IST]);
+
+  // Cutoff instant applied at next purge (delete rows with created_at < cutoff)
+  const cutoffAtNextRunIST = useMemo(() => {
+    if (!retentionDays || retentionDays <= 0) return null;
+    const c = new Date(nextPurgeIST);
+    c.setDate(c.getDate() - (retentionDays as number));
+    return c;
+  }, [nextPurgeIST, retentionDays]);
+
+  // Human-friendly labels
+  const formatISTFull = (d: Date) =>
+    new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(d);
+
+  const formatISTDay = (d: Date) =>
+    new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'long',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+    }).format(d);
+
+  // The calendar "bill day" affected at the next purge (IST day label)
+  const affectedBillDayIST = useMemo(() => {
+    if (!cutoffAtNextRunIST) return null;
+    return formatISTDay(cutoffAtNextRunIST);
+  }, [cutoffAtNextRunIST]);
+
+  // --- Query the DB to know if *any* rows will be deleted (so we can say "No data yet" if zero) ---
+  useEffect(() => {
+    const run = async () => {
+      if (!cutoffAtNextRunIST) {
+        setBillsToDeleteCount(null);
+        return;
+      }
+      setCountLoading(true);
+      setCountError(null);
+      try {
+        // Convert the IST wall-clock cutoff to the UTC instant Postgres stores in timestamptz
+        const cutoffISO = cutoffAtNextRunIST.toISOString();
+
+        // Count across ALL franchises (global purge). To scope to a franchise, add .eq('franchise_id','FR-CENTRAL')
+        const { count, error } = await supabase
+          .from('bills_generated_billing')
+          .select('id', { head: true, count: 'exact' })
+          .lt('created_at', cutoffISO);
+
+        if (error) throw error;
+        setBillsToDeleteCount(count ?? 0);
+      } catch (e: any) {
+        console.error('count error', e);
+        setCountError(e?.message || 'Failed to check eligibility');
+        setBillsToDeleteCount(null);
+      } finally {
+        setCountLoading(false);
+      }
+    };
+    run();
+  }, [cutoffAtNextRunIST]);
+
+  // ---------- helpers for the rest ----------
   const buildISTISO = (dateStr: string, endOfDay = false) => {
     const t = endOfDay ? '23:59:59.999' : '00:00:00.000';
     return new Date(`${dateStr}T${t}+05:30`).toISOString();
@@ -105,9 +228,9 @@ export function FRCentralDashboard() {
   const fetchFRCentralStats = async () => {
     try {
       const now = new Date();
-      const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-      const today = istNow.toISOString().split('T')[0];
-      const currentHourStart = `${today}T${istNow.getHours().toString().padStart(2, '0')}:00:00`;
+      const istNowLocal = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const today = istNowLocal.toISOString().split('T')[0];
+      const currentHourStart = `${today}T${istNowLocal.getHours().toString().padStart(2, '0')}:00:00`;
 
       const { data: todayBills, error } = await supabase
         .from('bills_generated_billing')
@@ -331,6 +454,49 @@ export function FRCentralDashboard() {
           </p>
         </CardContent></Card>
       </div>
+
+      {/* ---- Data Deletion Alert (minimal + accurate) ---- */}
+      {retentionDays && retentionDays > 0 && cutoffAtNextRunIST && (
+        <Card className="border border-red-500 bg-red-50">
+          <CardHeader className="flex flex-row items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-red-700 mt-0.5" />
+            <div className="flex-1">
+              <CardTitle className="text-base text-red-800">Data deletion warning</CardTitle>
+
+              {/* Window */}
+              <p className="text-sm text-red-800 mt-1">
+                Retention window: <span className="font-medium">{retentionDays} days</span> • Daily purge time:&nbsp;
+                <span className="font-medium">{String(PURGE_HOUR_IST).padStart(2, '0')}:00 IST</span>
+              </p>
+
+              {/* Which day + when */}
+              <p className="text-sm text-red-800 mt-1">
+                {countLoading ? (
+                  <>Checking…</>
+                ) : countError ? (
+                  <>Could not verify eligible rows. Next purge at <span className="font-medium">{formatISTFull(nextPurgeIST)} (IST)</span>.</>
+                ) : billsToDeleteCount === 0 ? (
+                  <>
+                    No data eligible for deletion yet. Next purge at&nbsp;
+                    <span className="font-medium">{formatISTFull(nextPurgeIST)} (IST)</span>.
+                  </>
+                ) : (
+                  <>
+                    At <span className="font-medium">{formatISTFull(nextPurgeIST)} (IST)</span>, the system will purge
+                    rows with <code>created_at &lt; {formatISTFull(cutoffAtNextRunIST)}</code>.&nbsp;
+                    Affected (IST calendar day): <span className="font-medium">{affectedBillDayIST}</span>.
+                  </>
+                )}
+              </p>
+
+              {/* Note */}
+              <p className="text-xs text-red-900/80 mt-2">
+                Note: If you&rsquo;ve already backed up your data, please ignore this message.
+              </p>
+            </div>
+          </CardHeader>
+        </Card>
+      )}
 
       {/* Single Date Range + Range Summary */}
       <Card>
