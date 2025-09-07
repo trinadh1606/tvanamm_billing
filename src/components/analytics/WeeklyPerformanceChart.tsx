@@ -10,27 +10,18 @@ import "react-datepicker/dist/react-datepicker.css";
 import DatePicker from 'react-datepicker';
 
 interface DayData {
-  day: string;            // short weekday (e.g., Mon)
-  date: string;           // YYYY-MM-DD (IST)
+  day: string;
+  date: string;
   revenue: number;
   orders: number;
   avgOrderValue: number;
-  dayOfWeek: string;      // long weekday (e.g., Monday)
-  labelShort: string;     // Mon (dd/MM/yyyy)
-  labelLong: string;      // Monday, 12 February 2025
+  dayOfWeek: string;
 }
 
 interface WeeklyPerformanceProps {
   userFranchiseId: string;
   isCentral: boolean;
 }
-
-type BillRow = {
-  id: number;
-  total: number | string | null;
-  created_at: string;
-  franchise_id: string;
-};
 
 export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPerformanceProps) {
   const [weeklyData, setWeeklyData] = useState<DayData[]>([]);
@@ -42,59 +33,13 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   const [totalOrders, setTotalOrders] = useState<number>(0);
   const { toast } = useToast();
 
-  // ------- IST helpers -------
-  const ymdIST = (d: Date) =>
-    d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
-
-  const buildISTStartISO = (d: Date) => {
-    const ymd = ymdIST(d);
-    return new Date(`${ymd}T00:00:00+05:30`).toISOString(); // inclusive start
-  };
-  const buildISTEndISO = (d: Date) => {
-    const ymd = ymdIST(d);
-    return new Date(`${ymd}T23:59:59.999+05:30`).toISOString(); // inclusive end-of-day
-  };
-
-  const istWeekdayLong = (ymd: string) =>
-    new Date(`${ymd}T12:00:00+05:30`).toLocaleDateString('en-GB', {
-      timeZone: 'Asia/Kolkata',
-      weekday: 'long',
-    });
-
-  const istWeekdayShort = (ymd: string) =>
-    new Date(`${ymd}T12:00:00+05:30`).toLocaleDateString('en-GB', {
-      timeZone: 'Asia/Kolkata',
-      weekday: 'short',
-    });
-
-  const labelShortFor = (ymd: string) => {
-    const [Y, M, D] = ymd.split('-');
-    const pretty = `${D}/${M}/${Y}`;
-    return `${istWeekdayShort(ymd)} (${pretty})`;
-  };
-
-  const labelLongFor = (ymd: string) =>
-    new Date(`${ymd}T12:00:00+05:30`).toLocaleDateString('en-GB', {
-      timeZone: 'Asia/Kolkata',
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
-
-  // For grouping bills by IST date
-  const dateKeyFromTimestampIST = (ts: string) =>
-    new Date(ts).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
-
   useEffect(() => {
     if (isCentral) fetchFranchiseList();
     fetchWeeklyData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCentral]);
 
   useEffect(() => {
     fetchWeeklyData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFranchise, startDate, endDate]);
 
   const fetchFranchiseList = async () => {
@@ -104,7 +49,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         .select('franchise_id')
         .order('franchise_id');
       if (error) throw error;
-      const uniqueFranchises = Array.from(new Set(data?.map(item => item.franchise_id) || [])).filter(Boolean);
+      const uniqueFranchises = Array.from(new Set(data?.map(item => item.franchise_id) || []));
       setFranchiseList(uniqueFranchises);
     } catch (error: any) {
       console.error('Error fetching franchise list:', error);
@@ -116,104 +61,83 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     }
   };
 
-  // ---- NEW: paginate to bypass Supabase's 1k row cap ----
-  const fetchBillsPaged = async (startISO: string, endISO: string): Promise<BillRow[]> => {
-    const pageSize = 1000;
-    let from = 0;
-    const all: BillRow[] = [];
-
-    while (true) {
-      const to = from + pageSize - 1;
-      let q = supabase
-        .from('bills_generated_billing')
-        .select('id, total, created_at, franchise_id')
-        .gte('created_at', startISO)
-        .lte('created_at', endISO)
-        .order('id', { ascending: true })
-        .range(from, to);
-
-      if (!isCentral) {
-        q = q.eq('franchise_id', userFranchiseId);
-      } else if (selectedFranchise) {
-        q = q.eq('franchise_id', selectedFranchise);
-      }
-
-      const { data, error } = await q;
-      if (error) throw error;
-      if (!data || data.length === 0) break;
-
-      all.push(...(data as BillRow[]));
-      if (data.length < pageSize) break;
-      from += pageSize;
-    }
-
-    return all;
-  };
-
   const fetchWeeklyData = async () => {
     setLoading(true);
     try {
       if (!startDate || !endDate) throw new Error("Please select both start and end dates");
 
-      // Normalize and ensure start <= end
-      let s = startDate;
-      let e = endDate;
-      if (s > e) [s, e] = [e, s];
+      let queryStartDate = new Date(startDate);
+      let queryEndDate = new Date(endDate);
+      if (queryStartDate > queryEndDate) [queryStartDate, queryEndDate] = [queryEndDate, queryStartDate];
 
-      // Build IST-inclusive bounds
-      const startISO = buildISTStartISO(s);
-      const endISO = buildISTEndISO(e);
+      queryEndDate.setHours(23, 59, 59, 999);
 
-      // Fetch *all* bills in the range (with pagination)
-      const bills = await fetchBillsPaged(startISO, endISO);
+      // Fetch bills data
+      let query = supabase
+        .from('bills_generated_billing')
+        .select('total, created_at, franchise_id')
+        .gte('created_at', queryStartDate.toISOString())
+        .lte('created_at', queryEndDate.toISOString());
 
-      // Seed day map for each IST date in range
-      const dayMap = new Map<string, DayData>();
+      if (!isCentral) {
+        query = query.eq('franchise_id', userFranchiseId);
+      } else if (selectedFranchise) {
+        query = query.eq('franchise_id', selectedFranchise);
+      }
 
-      const startYMD = ymdIST(s);
-      const endYMD = ymdIST(e);
+      const { data: bills, error } = await query;
+      if (error) throw error;
 
-      // utility to add days to YMD (in IST)
-      const addDaysYMD = (ymd: string, days: number) => {
-        const d = new Date(`${ymd}T12:00:00+05:30`);
-        d.setDate(d.getDate() + days);
-        return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-      };
+      // Fetch total orders accurately
+      let countQuery = supabase
+        .from('bills_generated_billing')
+        .select('id', { head: true, count: 'exact' })
+        .gte('created_at', queryStartDate.toISOString())
+        .lte('created_at', queryEndDate.toISOString());
 
-      let cur = startYMD;
-      while (true) {
-        dayMap.set(cur, {
-          day: istWeekdayShort(cur),
-          date: cur,
+      if (!isCentral) {
+        countQuery = countQuery.eq('franchise_id', userFranchiseId);
+      } else if (selectedFranchise) {
+        countQuery = countQuery.eq('franchise_id', selectedFranchise);
+      }
+
+      const { count, error: countError } = await countQuery;
+      if (countError) throw countError;
+      setTotalOrders(count || 0);
+
+      const dailyDataMap = new Map<string, DayData>();
+      const currentDate = new Date(queryStartDate);
+
+      while (currentDate <= queryEndDate) {
+        const dateKey = currentDate.toISOString().split('T')[0];
+        dailyDataMap.set(dateKey, {
+          day: currentDate.toLocaleDateString('en-GB', { weekday: 'short' }),
+          date: dateKey,
           revenue: 0,
           orders: 0,
           avgOrderValue: 0,
-          dayOfWeek: istWeekdayLong(cur),
-          labelShort: labelShortFor(cur),
-          labelLong: labelLongFor(cur),
+          dayOfWeek: currentDate.toLocaleDateString('en-GB', { weekday: 'long' }),
         });
-        if (cur === endYMD) break;
-        cur = addDaysYMD(cur, 1);
+        currentDate.setDate(currentDate.getDate() + 1);
       }
 
-      // Aggregate bills per IST day
-      for (const bill of bills) {
-        const key = dateKeyFromTimestampIST(bill.created_at);
-        const row = dayMap.get(key);
-        if (!row) continue; // out of seeded range (shouldn't happen)
-        row.revenue += Number(bill.total) || 0;
-        row.orders += 1;
-        row.avgOrderValue = row.orders > 0 ? row.revenue / row.orders : 0;
-        dayMap.set(key, row);
-      }
+      bills?.forEach(bill => {
+        const billDate = new Date(bill.created_at);
+        const dateKey = billDate.toISOString().split('T')[0];
 
-      const filled = Array.from(dayMap.values()).sort(
-        (a, b) => new Date(`${a.date}T00:00:00+05:30`).getTime() - new Date(`${b.date}T00:00:00+05:30`).getTime()
+        const dayData = dailyDataMap.get(dateKey)!;
+        dayData.revenue += Number(bill.total) || 0;
+        dayData.orders += 1;
+        dayData.avgOrderValue = dayData.orders > 0 ? dayData.revenue / dayData.orders : 0;
+
+        dailyDataMap.set(dateKey, dayData);
+      });
+
+      const filledWeekData = Array.from(dailyDataMap.values()).sort((a, b) =>
+        new Date(a.date).getTime() - new Date(b.date).getTime()
       );
 
-      setWeeklyData(filled);
-      // Keep totals in sync with exactly what we show
-      setTotalOrders(bills.length);
+      setWeeklyData(filledWeekData);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -221,8 +145,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         variant: "destructive",
       });
       console.error('Error fetching weekly data:', error);
-      setWeeklyData([]);
-      setTotalOrders(0);
     } finally {
       setLoading(false);
     }
@@ -236,7 +158,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
 
     const exportData = weeklyData.map(day => ({
       'Day': day.dayOfWeek,
-      'Date (IST)': day.date,
+      'Date': day.date,
       'Revenue (₹)': day.revenue.toFixed(2),
       'Orders': day.orders,
       'Avg Order Value (₹)': day.avgOrderValue.toFixed(2)
@@ -344,7 +266,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
             </Card>
           </div>
 
-          {/* Daily Revenue Trend */}
+          {/* Charts remain unchanged */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -358,20 +280,23 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={weeklyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="labelShort" tick={{ fontSize: 12 }} />
+                      <XAxis
+                        dataKey="date"
+                        tickFormatter={(value) => {
+                          const date = new Date(value);
+                          return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value.split('-').reverse().join('/')})`;
+                        }}
+                        tick={{ fontSize: 12 }}
+                      />
                       <YAxis />
                       <Tooltip
                         formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Revenue']}
-                        labelFormatter={(label) => String(label)}
+                        labelFormatter={(value) => {
+                          const date = new Date(value);
+                          return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                        }}
                       />
-                      <Line
-                        type="monotone"
-                        dataKey="revenue"
-                        stroke="hsl(var(--primary))"
-                        strokeWidth={3}
-                        dot={{ r: 6, strokeWidth: 2, fill: 'hsl(var(--primary))' }}
-                        activeDot={{ r: 8 }}
-                      />
+                      <Line type="monotone" dataKey="revenue" stroke="hsl(var(--primary))" strokeWidth={3} dot={{ r: 6, strokeWidth: 2, fill: 'hsl(var(--primary))' }} activeDot={{ r: 8 }} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -379,7 +304,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
             </div>
           </div>
 
-          {/* Daily Orders */}
           <div className="mb-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Daily Orders Count</h3>
@@ -390,11 +314,21 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={weeklyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="labelShort" tick={{ fontSize: 12 }} />
+                      <XAxis
+                        dataKey="date"
+                        tickFormatter={(value) => {
+                          const date = new Date(value);
+                          return `${date.toLocaleDateString('en-GB', { weekday: 'short' })} (${value.split('-').reverse().join('/')})`;
+                        }}
+                        tick={{ fontSize: 12 }}
+                      />
                       <YAxis />
                       <Tooltip
                         formatter={(value: number) => [value, 'Orders']}
-                        labelFormatter={(label) => String(label)}
+                        labelFormatter={(value) => {
+                          const date = new Date(value);
+                          return date.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                        }}
                       />
                       <Bar dataKey="orders" fill="hsl(var(--secondary))" radius={[4, 4, 0, 0]} />
                     </BarChart>
