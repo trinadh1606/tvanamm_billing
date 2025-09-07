@@ -16,11 +16,35 @@ export function AdminDashboard() {
       description="Franchise Management and Analytics"
     >
       <Tabs defaultValue="analytics" className="w-full">
-        <TabsList className="grid w-full grid-cols-5">
-          <TabsTrigger value="analytics">Analytics</TabsTrigger>
-          <TabsTrigger value="insights">Predictions</TabsTrigger>
-          <TabsTrigger value="menu">Menu</TabsTrigger>
-          <TabsTrigger value="bills">Bills</TabsTrigger>
+        {/* Tabs bar with custom green */}
+        <TabsList
+          className="grid w-full grid-cols-5 rounded-md"
+          style={{ backgroundColor: 'rgb(0,100,55)' }}
+        >
+          <TabsTrigger
+            value="analytics"
+            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)] text-white"
+          >
+            Analytics
+          </TabsTrigger>
+          <TabsTrigger
+            value="insights"
+            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)] text-white"
+          >
+            Predictions
+          </TabsTrigger>
+          <TabsTrigger
+            value="menu"
+            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)] text-white"
+          >
+            Menu
+          </TabsTrigger>
+          <TabsTrigger
+            value="bills"
+            className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)] text-white"
+          >
+            Bills
+          </TabsTrigger>
         </TabsList>
         
         <TabsContent value="analytics">
@@ -30,8 +54,6 @@ export function AdminDashboard() {
         <TabsContent value="insights">
           <PredictiveInsights />
         </TabsContent>
-        
-
         
         <TabsContent value="menu">
           <MenuManager />

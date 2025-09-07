@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Activity, TrendingUp, DollarSign, Clock, Zap, AlertCircle } from 'lucide-react';
+import { Activity, TrendingUp, AlertCircle } from 'lucide-react';
 
 interface LiveStats {
   currentHourRevenue: number;
@@ -37,14 +37,12 @@ export function RealTimeAnalytics() {
   });
   const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const { franchiseId } = useAuth();
   const { toast } = useToast();
 
   useEffect(() => {
     fetchLiveData();
-    
-    // Set up real-time subscription
     const channel = supabase
       .channel('bills-changes')
       .on(
@@ -53,20 +51,18 @@ export function RealTimeAnalytics() {
           event: 'INSERT',
           schema: 'public',
           table: 'bills_generated_billing',
-          filter: `franchise_id=eq.${franchiseId}`
+          filter: `franchise_id=eq.${franchiseId}`,
         },
         (payload) => {
-          console.log('New bill received:', payload);
           fetchLiveData();
           toast({
-            title: "New Sale! 🎉",
+            title: 'New Sale! 🎉',
             description: `₹${Number(payload.new.total).toFixed(2)} - Just now`,
           });
         }
       )
       .subscribe();
 
-    // Refresh data every 30 seconds
     const interval = setInterval(fetchLiveData, 30000);
 
     return () => {
@@ -77,67 +73,58 @@ export function RealTimeAnalytics() {
 
   const fetchLiveData = async () => {
     if (!franchiseId) return;
-    
+
     try {
-      const now = new Date();
-      const currentHour = now.getHours();
-      
-      // Use proper IST timezone conversion
-      const istNow = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+      const istNow = new Date(
+        new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
+      );
       const today = istNow.toISOString().split('T')[0];
-      const currentHourStart = `${today}T${istNow.getHours().toString().padStart(2, '0')}:00:00`;
-      
-      console.log('Analytics Debug:', { now: now.toISOString(), istNow: istNow.toISOString(), today, currentHourStart, franchiseId });
-      
-      // Get today's bills with proper timezone handling
-      const { data: todayBills, error: todayError } = await supabase
+      const currentHourStart = `${today}T${istNow
+        .getHours()
+        .toString()
+        .padStart(2, '0')}:00:00`;
+
+      const { data: todayBills } = await supabase
         .from('bills_generated_billing')
         .select('total, created_at')
         .eq('franchise_id', franchiseId)
         .gte('created_at', today + 'T00:00:00')
         .order('created_at', { ascending: false });
 
-      if (todayError) throw todayError;
+      const currentHourBills =
+        todayBills?.filter((bill) => bill.created_at >= currentHourStart) || [];
 
-      // Get current hour bills
-      const currentHourBills = todayBills?.filter(bill => 
-        bill.created_at >= currentHourStart
-      ) || [];
-
-      // Get recent activity (last 10 orders)
-      const { data: recentBills, error: recentError } = await supabase
+      const { data: recentBills } = await supabase
         .from('bills_generated_billing')
-        .select(`
+        .select(
+          `
           id,
           total,
           created_at,
           bill_items_generated_billing!inner(id)
-        `)
+        `
+        )
         .eq('franchise_id', franchiseId)
         .order('created_at', { ascending: false })
         .limit(10);
 
-      if (recentError) throw recentError;
-
-      // Calculate stats
-      const todayRevenue = todayBills?.reduce((sum, bill) => sum + Number(bill.total), 0) || 0;
+      const todayRevenue =
+        todayBills?.reduce((sum, bill) => sum + Number(bill.total), 0) || 0;
       const todayOrders = todayBills?.length || 0;
-      const currentHourRevenue = currentHourBills.reduce((sum, bill) => sum + Number(bill.total), 0);
+      const currentHourRevenue = currentHourBills.reduce(
+        (sum, bill) => sum + Number(bill.total),
+        0
+      );
       const currentHourOrders = currentHourBills.length;
-      const averageOrderValue = todayOrders > 0 ? todayRevenue / todayOrders : 0;
+      const averageOrderValue =
+        todayOrders > 0 ? todayRevenue / todayOrders : 0;
 
-      // Determine store status based on current hour activity
-      let storeStatus: LiveStats['storeStatus'] = 'quiet';
       let statusMessage = 'Store is quiet';
-      
       if (currentHourOrders >= 10) {
-        storeStatus = 'very-busy';
         statusMessage = 'Store is VERY BUSY! 🔥';
       } else if (currentHourOrders >= 5) {
-        storeStatus = 'busy';
         statusMessage = 'Store is busy 📈';
       } else if (currentHourOrders >= 2) {
-        storeStatus = 'normal';
         statusMessage = 'Store is moderately active';
       }
 
@@ -149,45 +136,30 @@ export function RealTimeAnalytics() {
         todayRevenue,
         todayOrders,
         averageOrderValue,
-        storeStatus,
+        storeStatus: 'normal',
         statusMessage,
         lastOrderTime,
       });
 
-      // Format recent activity
-      const formattedActivity = recentBills?.map(bill => ({
-        id: bill.id,
-        total: Number(bill.total),
-        created_at: bill.created_at,
-        items_count: bill.bill_items_generated_billing?.length || 0,
-      })) || [];
-
+      const formattedActivity =
+        recentBills?.map((bill) => ({
+          id: bill.id,
+          total: Number(bill.total),
+          created_at: bill.created_at,
+          items_count: bill.bill_items_generated_billing?.length || 0,
+        })) || [];
       setRecentActivity(formattedActivity);
-      
-    } catch (error: any) {
-      console.error('Error fetching live data:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const getStatusColor = (status: LiveStats['storeStatus']) => {
-    switch (status) {
-      case 'very-busy': return 'bg-destructive text-destructive-foreground';
-      case 'busy': return 'bg-warning text-warning-foreground';
-      case 'normal': return 'bg-success text-success-foreground';
-      default: return 'bg-muted text-muted-foreground';
-    }
-  };
-
   const getTimeSinceLastOrder = () => {
     if (!liveStats.lastOrderTime) return 'No orders today';
-    
     const now = new Date();
     const lastOrder = new Date(liveStats.lastOrderTime);
     const diffMs = now.getTime() - lastOrder.getTime();
     const diffMins = Math.floor(diffMs / (1000 * 60));
-    
     if (diffMins < 1) return 'Just now';
     if (diffMins < 60) return `${diffMins}m ago`;
     const diffHours = Math.floor(diffMins / 60);
@@ -201,20 +173,30 @@ export function RealTimeAnalytics() {
   return (
     <div className="space-y-6">
       {/* Live Status Banner */}
-      <Card className="border-2 border-primary/20">
+      <Card style={{ borderColor: 'rgb(0,100,55)', borderWidth: 2 }}>
         <CardContent className="p-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="relative">
-                <Activity className="h-8 w-8 text-primary" />
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-success rounded-full animate-pulse"></div>
+                <Activity className="h-8 w-8" style={{ color: 'rgb(0,100,55)' }} />
+                <div
+                  className="absolute -top-1 -right-1 w-3 h-3 rounded-full animate-pulse"
+                  style={{ backgroundColor: 'rgb(0,100,55)' }}
+                ></div>
               </div>
               <div>
                 <h3 className="text-xl font-bold">{liveStats.statusMessage}</h3>
-                <p className="text-muted-foreground">Last order: {getTimeSinceLastOrder()}</p>
+                <p className="text-muted-foreground">
+                  Last order: {getTimeSinceLastOrder()}
+                </p>
               </div>
             </div>
-            <Badge className={getStatusColor(liveStats.storeStatus)}>
+            <Badge
+              style={{
+                backgroundColor: 'rgb(0,100,55)',
+                color: 'white',
+              }}
+            >
               LIVE
             </Badge>
           </div>
@@ -225,28 +207,42 @@ export function RealTimeAnalytics() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2">
-            <AlertCircle className="h-5 w-5" />
+            <AlertCircle className="h-5 w-5" style={{ color: 'rgb(0,100,55)' }} />
             Live Activity Feed
           </CardTitle>
 
-          {/* NEW: total orders today indicator */}
           <div className="flex items-center gap-2">
-            <TrendingUp className="h-4 w-4 text-primary" />
-            <Badge variant="secondary" className="text-sm">
-              Total Orders Today: <span className="ml-1 font-semibold">{liveStats.todayOrders}</span>
+            <TrendingUp className="h-4 w-4" style={{ color: 'rgb(0,100,55)' }} />
+            <Badge
+              style={{
+                backgroundColor: 'rgb(0,100,55)',
+                color: 'white',
+              }}
+            >
+              Total Orders Today:{' '}
+              <span className="ml-1 font-semibold">{liveStats.todayOrders}</span>
             </Badge>
           </div>
         </CardHeader>
 
         <CardContent>
           {recentActivity.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">No recent activity</div>
+            <div className="text-center py-8 text-muted-foreground">
+              No recent activity
+            </div>
           ) : (
             <div className="space-y-3">
               {recentActivity.map((activity) => (
-                <div key={activity.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                <div
+                  key={activity.id}
+                  className="flex items-center justify-between p-3 rounded-lg"
+                  style={{ backgroundColor: 'rgba(0,100,55,0.1)' }}
+                >
                   <div className="flex items-center gap-3">
-                    <div className="w-2 h-2 bg-success rounded-full"></div>
+                    <div
+                      className="w-2 h-2 rounded-full"
+                      style={{ backgroundColor: 'rgb(0,100,55)' }}
+                    ></div>
                     <div>
                       <span className="font-medium">Order #{activity.id}</span>
                       <span className="text-muted-foreground ml-2">

@@ -24,8 +24,18 @@ interface ItemTrend {
   predictedNext7Revenue: number;
 }
 
-type BillRow = { id: number; created_at: string };
-type ItemRow = { item_name: string; qty: number; price: number; bill_id: number };
+// Row shape when joining items -> bills for created_at
+type ItemJoinRow = {
+  item_name: string | null;
+  qty: number | null;
+  price: number | null;
+  bills_generated_billing: { created_at: string } | null;
+};
+
+// Tunable thresholds so you can surface suggestions earlier
+const MIN_DAYS_FOR_TREND = 3;      // was 5
+const MIN_R2_CONFIDENCE = 0.2;     // was 0.5
+const DECLINE_SLOPE = -0.2;        // was -0.5
 
 export function PredictiveInsights() {
   const [insights, setInsights] = useState<BusinessInsight[]>([]);
@@ -35,73 +45,106 @@ export function PredictiveInsights() {
   const { franchiseId } = useAuth();
 
   useEffect(() => {
+    if (!franchiseId) return;
     generateInsights();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [franchiseId]);
 
+  // Build an IST day key like "YYYY-MM-DD" from an ISO timestamp
+  const istDayKey = (iso: string) => {
+    const d = new Date(new Date(iso).toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
   const generateInsights = async () => {
-    if (!franchiseId) return;
     setLoading(true);
     try {
-      // 1) Get all bills for this franchise (we'll use bills.created_at as the time for each item)
-      const { data: bills, error: billsErr } = await supabase
-        .from('bills_generated_billing')
-        .select('id, created_at')
-        .eq('franchise_id', franchiseId)
-        .order('created_at', { ascending: true });
+      // ---- PAGE THROUGH ALL ITEMS, JOIN BILLS FOR created_at, FILTER BY FRANCHISE ON BILLS ----
+      const PAGE = 1000;
+      let from = 0;
+      const allRows: ItemJoinRow[] = [];
 
-      if (billsErr) throw billsErr;
+      while (true) {
+        // Join items -> bills to get created_at and franchise filter; no IN(...) needed
+        let q = supabase
+          .from('bill_items_generated_billing')
+          .select(
+            `
+              item_name,
+              qty,
+              price,
+              bills_generated_billing!inner(created_at, franchise_id)
+            `,
+            { head: false }
+          )
+          .eq('bills_generated_billing.franchise_id', franchiseId)
+          // order by the joined table's created_at so pagination is deterministic
+          .order('created_at', {
+            referencedTable: 'bills_generated_billing',
+            ascending: true,
+          })
+          .range(from, from + PAGE - 1);
 
-      const billList: BillRow[] = bills ?? [];
-      if (billList.length === 0) {
+        const { data, error } = await q;
+        if (error) throw error;
+
+        const batch = (data ?? []) as unknown as ItemJoinRow[];
+        allRows.push(...batch);
+
+        if (!batch || batch.length < PAGE) break;
+        from += PAGE;
+      }
+
+      if (allRows.length === 0) {
         setItemTrends([]);
-        setInsights([]);
+        setInsights([
+          {
+            title: 'No sales data yet',
+            content: 'Start generating bills to unlock AI insights for your menu.',
+            type: 'growth',
+            icon: '🗂️',
+            color: 'secondary',
+          },
+        ]);
         setLoading(false);
         return;
       }
 
-      const billIdToCreatedAt = new Map<number, string>(
-        billList.map((b) => [b.id, b.created_at])
-      );
-      const billIds = billList.map((b) => b.id);
-
-      // 2) Fetch items for those bill ids (chunk to avoid IN(...) limits)
-      const CHUNK = 1000;
-      const allItems: ItemRow[] = [];
-      for (let i = 0; i < billIds.length; i += CHUNK) {
-        const slice = billIds.slice(i, i + CHUNK);
-        const { data: items, error: itemsErr } = await supabase
-          .from('bill_items_generated_billing')
-          .select('item_name, qty, price, bill_id')
-          .in('bill_id', slice);
-
-        if (itemsErr) throw itemsErr;
-        if (items?.length) allItems.push(...(items as ItemRow[]));
-      }
-
-      // 3) Attach created_at from the parent bill (no need for created_at on items)
-      const itemsData = allItems
-        .map((it) => {
-          const createdAt = billIdToCreatedAt.get(it.bill_id);
-          if (!createdAt) return null; // skip if unmatched (shouldn't happen if data is consistent)
+      // ---- STRUCTURE DATA WITH IST-DAY BUCKETS ----
+      // Normalize rows and keep only those with valid join info
+      const normalized = allRows
+        .map((r) => {
+          const created_at = r.bills_generated_billing?.created_at;
+          if (!created_at || !r.item_name) return null;
           return {
-            item_name: it.item_name,
-            qty: Number(it.qty) || 0,
-            price: Number(it.price) || 0,
-            created_at: createdAt,
+            item_name: r.item_name,
+            qty: Number(r.qty ?? 0),
+            price: Number(r.price ?? 0),
+            created_at,
           };
         })
         .filter(Boolean) as { item_name: string; qty: number; price: number; created_at: string }[];
 
-      const trends = analyzeItemTrends(itemsData);
+      const trends = analyzeItemTrends(normalized, istDayKey);
       setItemTrends(trends);
 
       const newInsights = generateBusinessInsights(trends);
       setInsights(newInsights);
-    } catch (error: any) {
-      console.error('Error generating insights:', error);
+    } catch (error) {
+      console.error('PredictiveInsights error:', error);
       setItemTrends([]);
-      setInsights([]);
+      setInsights([
+        {
+          title: 'Could not load insights',
+          content: 'Please refresh the page. If the issue persists, check your Supabase RLS policies.',
+          type: 'optimization',
+          icon: '⚠️',
+          color: 'warning',
+        },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -140,87 +183,85 @@ export function PredictiveInsights() {
     return { slope, intercept, rSquared };
   };
 
+  // Make trends using IST day buckets
   const analyzeItemTrends = (
-    items: { item_name: string; qty: number; price: number; created_at: string }[]
+    items: { item_name: string; qty: number; price: number; created_at: string }[],
+    dayKeyFn: (iso: string) => string
   ): ItemTrend[] => {
-    const itemMap = new Map<string, { day: number; qty: number; revenue: number }[]>();
+    // item -> dayKey -> { qty: number; revenue: number }
+    const bucket = new Map<string, Map<string, { qty: number; revenue: number }>>();
 
-    items.forEach((item) => {
-      if (!item.created_at) return; // safety
-      const date = new Date(item.created_at);
-      const day = Math.floor(date.getTime() / (1000 * 60 * 60 * 24)); // daily bucket
-      if (!itemMap.has(item.item_name)) itemMap.set(item.item_name, []);
-      itemMap.get(item.item_name)!.push({
-        day,
-        qty: Number(item.qty) || 0,
-        revenue: (Number(item.qty) || 0) * (Number(item.price) || 0),
+    items.forEach((it) => {
+      const key = dayKeyFn(it.created_at);
+      if (!bucket.has(it.item_name)) bucket.set(it.item_name, new Map());
+      const dayMap = bucket.get(it.item_name)!;
+      const prev = dayMap.get(key) || { qty: 0, revenue: 0 };
+      dayMap.set(key, {
+        qty: prev.qty + (Number(it.qty) || 0),
+        revenue: prev.revenue + (Number(it.qty) || 0) * (Number(it.price) || 0),
       });
     });
 
     const trends: ItemTrend[] = [];
 
-    itemMap.forEach((dailyData, item_name) => {
-      const dayMap = new Map<number, { qty: number; revenue: number }>();
-      dailyData.forEach((data) => {
-        if (!dayMap.has(data.day)) dayMap.set(data.day, { qty: 0, revenue: 0 });
-        const existing = dayMap.get(data.day)!;
-        dayMap.set(data.day, {
-          qty: existing.qty + data.qty,
-          revenue: existing.revenue + data.revenue,
-        });
-      });
+    for (const [item_name, dayMap] of bucket.entries()) {
+      // Sort days chronologically
+      const days = Array.from(dayMap.keys()).sort();
+      if (days.length < MIN_DAYS_FOR_TREND) continue; // need enough points for a line
 
-      const days = Array.from(dayMap.keys()).sort((a, b) => a - b);
       const quantities = days.map((d) => dayMap.get(d)!.qty);
+      const revenues = days.map((d) => dayMap.get(d)!.revenue);
 
-      if (days.length >= 5) {
-        const x = days.map((_d, i) => i); // 0..n-1
-        const y = quantities;
+      // Create x = 0..n-1 for regression on the ordered days
+      const x = days.map((_d, i) => i);
+      const y = quantities;
+      const { slope, intercept, rSquared } = linearRegression(x, y);
 
-        const { slope, intercept, rSquared } = linearRegression(x, y);
+      const totalSold = quantities.reduce((s, q) => s + q, 0);
+      const totalRevenue = revenues.reduce((s, r) => s + r, 0);
+      const avgPrice = totalSold > 0 ? totalRevenue / totalSold : 0;
 
-        const totalSold = quantities.reduce((sum, q) => sum + q, 0);
-        const totalRevenue = days.reduce((sum, d) => sum + dayMap.get(d)!.revenue, 0);
-        const avgPrice = totalSold > 0 ? totalRevenue / totalSold : 0;
+      const n = x.length;
+      const predict = (t: number) => Math.max(0, slope * t + intercept);
+      const predictedTomorrow = predict(n);
+      const predictedNext7Total = Array.from({ length: 7 }, (_, h) => predict(n + h)).reduce(
+        (a, b) => a + b,
+        0
+      );
+      const predictedNext7Revenue = predictedNext7Total * avgPrice;
 
-        const n = x.length;
-        const predict = (t: number) => Math.max(0, slope * t + intercept);
-        const predictedTomorrow = predict(n);
-        const predictedNext7Total = Array.from({ length: 7 }, (_, h) => predict(n + h)).reduce(
-          (a, b) => a + b,
-          0
-        );
-        const predictedNext7Revenue = predictedNext7Total * avgPrice;
+      trends.push({
+        item_name,
+        slope,
+        intercept,
+        rSquared,
+        totalSold,
+        totalRevenue,
+        predictedTomorrow,
+        predictedNext7Total,
+        predictedNext7Revenue,
+      });
+    }
 
-        trends.push({
-          item_name,
-          slope,
-          intercept,
-          rSquared,
-          totalSold,
-          totalRevenue,
-          predictedTomorrow,
-          predictedNext7Total,
-          predictedNext7Revenue,
-        });
-      }
-    });
-
+    // Sort by upward trend
     return trends.sort((a, b) => b.slope - a.slope);
   };
 
   const generateBusinessInsights = (trends: ItemTrend[]): BusinessInsight[] => {
     const insights: BusinessInsight[] = [];
 
-    const topTrending = trends.filter((t) => t.slope > 0 && t.rSquared > 0.5).slice(0, 3);
-    const decliningItems = trends.filter((t) => t.slope < -0.5 && t.rSquared > 0.5).slice(0, 3);
+    const topTrending = trends
+      .filter((t) => t.slope > 0 && t.rSquared >= MIN_R2_CONFIDENCE)
+      .slice(0, 3);
+
+    const decliningItems = trends
+      .filter((t) => t.slope <= DECLINE_SLOPE && t.rSquared >= MIN_R2_CONFIDENCE)
+      .slice(0, 3);
 
     if (topTrending.length > 0) {
       insights.push({
         title: 'Selling Fast',
-        content: `Sales are increasing for: ${topTrending
-          .map((t) => t.item_name)
-          .join(', ')}. Stock up and highlight these on your menu and offers.`,
+        content: `Sales are increasing for: ${topTrending.map((t) => t.item_name).join(', ')}. Stock up and highlight these on your menu and offers.`,
         type: 'optimization',
         icon: '🔥',
         color: 'success',
@@ -230,9 +271,7 @@ export function PredictiveInsights() {
     if (decliningItems.length > 0) {
       insights.push({
         title: 'Falling Sales',
-        content: `Sales are decreasing for: ${decliningItems
-          .map((t) => t.item_name)
-          .join(', ')}. Try limited-time deals, combos, or consider replacing them.`,
+        content: `Sales are decreasing for: ${decliningItems.map((t) => t.item_name).join(', ')}. Try limited-time deals, combos, or consider replacing them.`,
         type: 'optimization',
         icon: '📉',
         color: 'warning',
@@ -240,7 +279,6 @@ export function PredictiveInsights() {
     }
 
     const highValueItems = [...trends].sort((a, b) => b.totalRevenue - a.totalRevenue).slice(0, 3);
-
     if (highValueItems.length > 0) {
       insights.push({
         title: 'Top Revenue Items',
@@ -253,13 +291,27 @@ export function PredictiveInsights() {
       });
     }
 
-    insights.push({
-      title: 'Keep Tuning Your Menu',
-      content: 'Review trends regularly and adjust prices, bundles, and visibility to boost profit.',
-      type: 'growth',
-      icon: '📊',
-      color: 'secondary',
-    });
+    // Fallback if nothing met thresholds — ensures the section shows something helpful
+    if (insights.length === 0) {
+      insights.push(
+        {
+          title: 'Build Early Momentum',
+          content:
+            'Not enough consistent daily data yet for confident trends. Try featuring best-sellers on your home screen and run a small bundle offer.',
+          type: 'growth',
+          icon: '🚀',
+          color: 'secondary',
+        },
+        {
+          title: 'Nudge Low-visibility Items',
+          content:
+            'Rotate low-selling items to the top of categories, add photos, and test ₹10–₹20 price adjustments.',
+          type: 'optimization',
+          icon: '🛠️',
+          color: 'success',
+        }
+      );
+    }
 
     return insights;
   };
@@ -358,7 +410,7 @@ export function PredictiveInsights() {
             </table>
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            Forecasts are based on all your available sales data up to today. 
+            Forecasts are based on all your available sales data up to today.
           </p>
         </div>
       </CardContent>

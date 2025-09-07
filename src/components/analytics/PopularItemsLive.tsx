@@ -13,14 +13,14 @@ import { Coffee, Award } from 'lucide-react';
 interface PopularItem {
   item_name: string;
   total_quantity: number;
-  total_revenue: number;
+  total_revenue: number; // adjusted to match bills
   percentage: number;
   growth: number;
   category?: string;
 }
 interface CategoryData {
   category: string;
-  revenue: number;
+  revenue: number; // adjusted to match bills
   items: number;
   color: string;
   percentage: number;
@@ -28,9 +28,20 @@ interface CategoryData {
 interface AllItem {
   item_name: string;
   total_quantity: number;
-  total_revenue: number;
+  total_revenue: number; // adjusted to match bills
   category: string;
 }
+
+type ItemRow = {
+  item_name: string | null;
+  qty: number | null;
+  price: number | null;
+  bill_id: number | null;
+  menu_items: { category: string | null } | null;
+  bills_generated_billing: { created_at: string; total: number | null } | null;
+};
+
+const PAGE = 1000;
 
 const toISOStart = (dStr: string) => new Date(`${dStr}T00:00:00`).toISOString();
 const nextDayISO = (dStr: string) => {
@@ -43,6 +54,7 @@ export function PopularItemsLive() {
   const [popularItems, setPopularItems] = useState<PopularItem[]>([]);
   const [categoryData, setCategoryData] = useState<CategoryData[]>([]);
   const [allItems, setAllItems] = useState<AllItem[]>([]);
+  const [grandTotalBills, setGrandTotalBills] = useState<number>(0);
   const [loading, setLoading] = useState(true);
 
   const [startDate, setStartDate] = useState<string>('');
@@ -74,14 +86,165 @@ export function PopularItemsLive() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [franchiseId]);
 
+  // ---------- Paging helpers ----------
+  const pageThroughBills = async (opts: {
+    franchiseId: string;
+    startISO?: string;
+    endISO?: string;
+  }) => {
+    let from = 0;
+    const all: { id: number; total: number; created_at: string }[] = [];
+
+    while (true) {
+      let q = supabase
+        .from('bills_generated_billing')
+        .select('id,total,created_at')
+        .eq('franchise_id', opts.franchiseId)
+        .order('created_at', { ascending: true })
+        .range(from, from + PAGE - 1);
+
+      if (opts.startISO) q = q.gte('created_at', opts.startISO);
+      if (opts.endISO) q = q.lt('created_at', opts.endISO);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const batch = (data ?? []) as any[];
+      all.push(
+        ...batch.map((b) => ({
+          id: Number(b.id),
+          total: Number(b.total ?? 0),
+          created_at: b.created_at as string,
+        }))
+      );
+
+      if (!batch || batch.length < PAGE) break;
+      from += PAGE;
+    }
+
+    return all;
+  };
+
+  const pageThroughItems = async (opts: {
+    franchiseId: string;
+    startISO?: string;
+    endISO?: string;
+  }) => {
+    let from = 0;
+    const all: ItemRow[] = [];
+
+    while (true) {
+      let q = supabase
+        .from('bill_items_generated_billing')
+        .select(
+          `
+          item_name,
+          qty,
+          price,
+          bill_id,
+          menu_items!inner(category),
+          bills_generated_billing!inner(created_at,total)
+        `
+        )
+        .eq('franchise_id', opts.franchiseId)
+        .order('created_at', { referencedTable: 'bills_generated_billing', ascending: true })
+        .range(from, from + PAGE - 1);
+
+      if (opts.startISO) q = q.gte('bills_generated_billing.created_at', opts.startISO);
+      if (opts.endISO) q = q.lt('bills_generated_billing.created_at', opts.endISO);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const batch = (data ?? []) as unknown as ItemRow[];
+      all.push(...batch);
+
+      if (!batch || batch.length < PAGE) break;
+      from += PAGE;
+    }
+
+    return all;
+  };
+
+  // ---------- Paise-accurate per-bill allocation ----------
+  type BillItemTmp = {
+    item_name: string;
+    qty: number;
+    price: number;
+    category: string;
+    rawPaise: number; // qty*price in paise
+  };
+
+  const allocateBillPaiseExactly = (
+    billTotalPaise: number,
+    items: BillItemTmp[],
+  ): { name: string; qty: number; category: string; adjustedPaise: number }[] => {
+    const rawSum = items.reduce((s, it) => s + it.rawPaise, 0);
+
+    // If rawSum is zero (weird edge), just return zeros
+    if (rawSum <= 0) {
+      return items.map((it) => ({
+        name: it.item_name,
+        qty: it.qty,
+        category: it.category,
+        adjustedPaise: 0,
+      }));
+    }
+
+    const factor = billTotalPaise / rawSum;
+
+    // First pass: floor allocations & track remainders
+    const floored: { idx: number; base: number; remainder: number }[] = items.map((it, idx) => {
+      const exact = it.rawPaise * factor;
+      const base = Math.floor(exact);
+      const remainder = exact - base; // fractional paise
+      return { idx, base, remainder };
+    });
+
+    const baseSum = floored.reduce((s, f) => s + f.base, 0);
+    let remaining = billTotalPaise - baseSum; // number of paise to distribute
+
+    // Distribute remaining paise by largest remainder
+    floored.sort((a, b) => b.remainder - a.remainder);
+    for (let i = 0; i < floored.length && remaining > 0; i++) {
+      floored[i].base += 1;
+      remaining -= 1;
+    }
+
+    // Map back
+    floored.sort((a, b) => a.idx - b.idx);
+    return floored.map((f) => ({
+      name: items[f.idx].item_name,
+      qty: items[f.idx].qty,
+      category: items[f.idx].category,
+      adjustedPaise: f.base,
+    }));
+  };
+
   const fetchData = async (range?: { start?: string; end?: string }) => {
     if (!franchiseId) return;
     setLoading(true);
 
     try {
-      // ---- today vs yesterday (unchanged) ----
+      // ---------- Range bounds ----------
+      const startISO = range?.start ? toISOStart(range.start) : undefined;
+      const endISO = range?.end ? nextDayISO(range.end) : undefined;
+
+      // ---------- Grand total (bills) with pagination ----------
+      const bills = await pageThroughBills({ franchiseId, startISO, endISO });
+      const billTotalsMap = new Map<number, number>();
+      const grandTotal = bills.reduce((s, b) => {
+        billTotalsMap.set(b.id, b.total);
+        return s + b.total;
+      }, 0);
+      setGrandTotalBills(grandTotal);
+
+      // ---------- Today vs Yesterday (quick popular, raw revenue) ----------
       const todayStr = new Date().toISOString().split('T')[0];
-      const { data: todayItems, error: todayError } = await supabase
+      const y = new Date(); y.setDate(y.getDate() - 1);
+      const yStr = y.toISOString().split('T')[0];
+
+      const { data: todayItems, error: todayErr } = await supabase
         .from('bill_items_generated_billing')
         .select(`
           item_name,
@@ -93,11 +256,9 @@ export function PopularItemsLive() {
         `)
         .eq('franchise_id', franchiseId)
         .gte('bills_generated_billing.created_at', todayStr);
-      if (todayError) throw todayError;
+      if (todayErr) throw todayErr;
 
-      const y = new Date(); y.setDate(y.getDate() - 1);
-      const yStr = y.toISOString().split('T')[0];
-      const { data: yesterdayItems, error: yesterdayError } = await supabase
+      const { data: yesterdayItems, error: yesterdayErr } = await supabase
         .from('bill_items_generated_billing')
         .select(`
           item_name,
@@ -107,11 +268,16 @@ export function PopularItemsLive() {
         .eq('franchise_id', franchiseId)
         .gte('bills_generated_billing.created_at', yStr)
         .lt('bills_generated_billing.created_at', todayStr);
-      if (yesterdayError) throw yesterdayError;
+      if (yesterdayErr) throw yesterdayErr;
 
       const todayMap = new Map<string, { quantity: number; revenue: number; category: string }>();
-      todayItems?.forEach((row: any) => {
-        const prev = todayMap.get(row.item_name) || { quantity: 0, revenue: 0, category: row?.menu_items?.category || 'Other' };
+      (todayItems || []).forEach((row: any) => {
+        const prev =
+          todayMap.get(row.item_name) || {
+            quantity: 0,
+            revenue: 0,
+            category: row?.menu_items?.category || 'Other',
+          };
         todayMap.set(row.item_name, {
           quantity: prev.quantity + (row?.qty ?? 0),
           revenue: prev.revenue + (row?.qty ?? 0) * Number(row?.price ?? 0),
@@ -119,7 +285,7 @@ export function PopularItemsLive() {
         });
       });
       const yesterdayMap = new Map<string, number>();
-      yesterdayItems?.forEach((row: any) => {
+      (yesterdayItems || []).forEach((row: any) => {
         const prev = yesterdayMap.get(row.item_name) || 0;
         yesterdayMap.set(row.item_name, prev + (row?.qty ?? 0));
       });
@@ -131,7 +297,7 @@ export function PopularItemsLive() {
           return {
             item_name: name,
             total_quantity: data.quantity,
-            total_revenue: data.revenue,
+            total_revenue: data.revenue, // raw here (quick section)
             percentage: totalQtyToday > 0 ? (data.quantity / totalQtyToday) * 100 : 0,
             growth,
             category: data.category,
@@ -141,47 +307,56 @@ export function PopularItemsLive() {
         .slice(0, 10);
       setPopularItems(itemsArray);
 
-      // ---- range / all-time ----
-      const startISO = range?.start ? toISOStart(range.start) : undefined;
-      const endISO = range?.end ? nextDayISO(range.end) : undefined;
+      // ---------- Range / All-time: page items, allocate paise per bill to match bills sum ----------
+      const rows = await pageThroughItems({ franchiseId, startISO, endISO });
 
-      let allQuery = supabase
-        .from('bill_items_generated_billing')
-        .select(`
-          item_name,
-          qty,
-          price,
-          menu_items!inner(category),
-          bills_generated_billing!inner(created_at)
-        `)
-        .eq('franchise_id', franchiseId);
-      if (startISO) allQuery = allQuery.gte('bills_generated_billing.created_at', startISO);
-      if (endISO) allQuery = allQuery.lt('bills_generated_billing.created_at', endISO);
+      // Build per-bill buckets of item lines (in paise)
+      const perBill = new Map<number, BillItemTmp[]>();
+      for (const r of rows) {
+        const billId = (r.bill_id ?? -1) as number;
+        const name = r.item_name ?? 'Unknown';
+        const qty = Number(r.qty ?? 0);
+        const price = Number(r.price ?? 0);
+        const category = r.menu_items?.category || 'Other';
 
-      const { data: allRows, error: allErr } = await allQuery;
-      if (allErr) throw allErr;
+        // qty * price -> paise (integer)
+        const rawPaise = Math.round(qty * price * 100);
 
-      const allMap = new Map<string, { quantity: number; revenue: number; category: string }>();
-      allRows?.forEach((row: any) => {
-        const prev = allMap.get(row.item_name) || { quantity: 0, revenue: 0, category: row?.menu_items?.category || 'Other' };
-        allMap.set(row.item_name, {
-          quantity: prev.quantity + (row?.qty ?? 0),
-          revenue: prev.revenue + (row?.qty ?? 0) * Number(row?.price ?? 0),
-          category: prev.category,
-        });
-      });
+        if (!perBill.has(billId)) perBill.set(billId, []);
+        perBill.get(billId)!.push({ item_name: name, qty, price, category, rawPaise });
+      }
 
-      const allItemsArr: AllItem[] = Array.from(allMap.entries())
+      // Accumulate adjusted totals across all bills
+      const itemAgg = new Map<string, { qty: number; paise: number; category: string }>();
+
+      for (const [billId, items] of perBill.entries()) {
+        const billTotal = billTotalsMap.get(billId) ?? Number(rows.find(r => (r.bill_id ?? -1) === billId)?.bills_generated_billing?.total ?? 0);
+        const billTotalPaise = Math.round(billTotal * 100);
+        const adjusted = allocateBillPaiseExactly(billTotalPaise, items);
+
+        for (const a of adjusted) {
+          const prev = itemAgg.get(a.name) || { qty: 0, paise: 0, category: a.category };
+          itemAgg.set(a.name, {
+            qty: prev.qty + a.qty,
+            paise: prev.paise + a.adjustedPaise,
+            category: prev.category,
+          });
+        }
+      }
+
+      // Flatten to items (in rupees)
+      const allItemsArr: AllItem[] = Array.from(itemAgg.entries())
         .map(([name, v]) => ({
           item_name: name,
-          total_quantity: v.quantity,
-          total_revenue: v.revenue,
+          total_quantity: v.qty,
+          total_revenue: v.paise / 100,
           category: v.category,
         }))
         .sort((a, b) => b.total_revenue - a.total_revenue);
       setAllItems(allItemsArr);
 
-      const totalRevenue = allItemsArr.reduce((s, v) => s + v.total_revenue, 0);
+      // categories (adjusted, guaranteed to match bill sum)
+      const totalAdjustedRevenue = allItemsArr.reduce((s, v) => s + v.total_revenue, 0);
       const rawCategories = Array.from(
         allItemsArr.reduce((m, item) => {
           const c = m.get(item.category) || { revenue: 0, items: 0 };
@@ -207,13 +382,16 @@ export function PopularItemsLive() {
           revenue: v.revenue,
           items: v.items,
           color: colors[idx % colors.length],
-          percentage: totalRevenue > 0 ? (v.revenue / totalRevenue) * 100 : 0,
+          percentage: totalAdjustedRevenue > 0 ? (v.revenue / totalAdjustedRevenue) * 100 : 0,
         }))
         .sort((a, b) => b.revenue - a.revenue);
       setCategoryData(cats);
     } catch (e) {
       console.error('Error fetching items:', e);
-      setPopularItems([]); setAllItems([]); setCategoryData([]);
+      setPopularItems([]);
+      setAllItems([]);
+      setCategoryData([]);
+      setGrandTotalBills(0);
     } finally {
       setLoading(false);
     }
@@ -297,6 +475,12 @@ export function PopularItemsLive() {
               Showing results {startDate ? `from ${startDate}` : 'from start'} {endDate ? `to ${endDate}` : 'to now'}
             </div>
           )}
+          {!startDate && !endDate && (
+            <div className="mt-3 text-sm">
+              <span className="font-medium">Grand Total (Bills): </span>
+              ₹{grandTotalBills.toFixed(2)}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -305,12 +489,11 @@ export function PopularItemsLive() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 justify-center">
             <Coffee className="h-5 w-5" />
-            Sales by Category {startDate || endDate ? '(Selected Range)' : '(Till Date)'}
+            Sales by Category {startDate || endDate ? '(Selected Range)' : '(All Time)'}
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-            {/* Pie chart (2/3 width on md+) */}
             <div className="md:col-span-2 h-[340px]">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -324,25 +507,22 @@ export function PopularItemsLive() {
                     innerRadius={78}
                     paddingAngle={3}
                     labelLine={false}
-                    // keep slices clean; labels shown via tooltip on hover
                   >
                     {categoryData.map((entry, i) => (
                       <Cell key={`cell-${i}`} fill={entry.color} />
                     ))}
                   </Pie>
                   <Tooltip
-                    // show category name + rupee value + percent
-                    formatter={(value: number, name: string, props: any) => {
+                    formatter={(value: number, name: string) => {
                       const total = categoryData.reduce((s, c) => s + c.revenue, 0);
                       const pct = total ? ((Number(value) / total) * 100).toFixed(1) : '0.0';
-                      return [`₹${Number(value).toFixed(2)} • ${pct}%`, name]; // name == category
+                      return [`₹${Number(value).toFixed(2)} • ${pct}%`, name];
                     }}
                   />
                 </PieChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Side table (1/3 width) */}
             <div className="md:col-span-1">
               <div className="rounded-md border overflow-hidden">
                 <table className="w-full text-sm">
@@ -376,10 +556,6 @@ export function PopularItemsLive() {
                   </tbody>
                 </table>
               </div>
-              {/* optional: small footnote with item counts per category */}
-              {/* <div className="mt-2 text-xs text-muted-foreground">
-                {categoryData.map(c => `${c.category}: ${c.items} items`).join(' • ')}
-              </div> */}
             </div>
           </div>
         </CardContent>
@@ -390,7 +566,7 @@ export function PopularItemsLive() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Award className="h-5 w-5" />
-            {startDate || endDate ? 'Items (Selected Range)' : 'All Items (Till Date)'}
+            {startDate || endDate ? 'Items (Selected Range)' : 'All Items (All Time)'}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -446,6 +622,9 @@ export function PopularItemsLive() {
                 </tr>
               </tfoot>
             </table>
+          </div>
+          <div className="text-xs text-muted-foreground mt-2">
+            <strong>Grand Total (Bills):</strong> ₹{grandTotalBills.toFixed(2)}
           </div>
         </CardContent>
       </Card>
