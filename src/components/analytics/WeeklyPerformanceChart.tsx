@@ -6,7 +6,7 @@ import { Calendar, Download, TrendingUp } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import * as XLSX from 'xlsx';
-import "react-datepicker/dist/react-datepicker.css";
+import 'react-datepicker/dist/react-datepicker.css';
 import DatePicker from 'react-datepicker';
 
 interface DayData {
@@ -30,6 +30,12 @@ type BillRow = {
   total: number | string | null;
   created_at: string;
   franchise_id: string;
+};
+
+// ---- Shift state persisted by "Bill History" ----
+type ShiftState = {
+  day: string;      // YYYY-MM-DD local day of activation
+  startISO: string; // ISO timestamp when shift began (UTC ISO string)
 };
 
 export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPerformanceProps) {
@@ -86,6 +92,36 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   const dateKeyFromTimestampIST = (ts: string) =>
     new Date(ts).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
 
+  // ---------- Shift helpers (reuse the same keys as Bill History) ----------
+  const todayStrLocal = () => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+  const shiftKey = (fid: string) => `bill_date_shift_state:${fid}`;
+
+  // Reads shift start for a specific franchise if the shift is active *today*; otherwise null.
+  const getShiftStartForFranchise = (fid: string | null): Date | null => {
+    if (!fid) return null;
+    const raw = localStorage.getItem(shiftKey(fid));
+    if (!raw) return null;
+    try {
+      const parsed: ShiftState = JSON.parse(raw);
+      if (parsed?.day === todayStrLocal() && parsed?.startISO) {
+        const d = new Date(parsed.startISO);
+        if (!Number.isNaN(d.getTime())) return d;
+      } else {
+        // stale entry — let Bill History clear it, but we ignore it here
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  };
+
   useEffect(() => {
     if (isCentral) fetchFranchiseList();
     fetchWeeklyData();
@@ -97,26 +133,79 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFranchise, startDate, endDate]);
 
+  // --- Franchise list loading with multiple fallbacks ---
   const fetchFranchiseList = async () => {
     try {
-      const { data, error } = await supabase
-        .from('bills_generated_billing')
-        .select('franchise_id')
-        .order('franchise_id');
-      if (error) throw error;
-      const uniqueFranchises = Array.from(new Set(data?.map(item => item.franchise_id) || [])).filter(Boolean);
-      setFranchiseList(uniqueFranchises);
+      // 1) Prefer a dedicated `franchises` table if it exists
+      let list: string[] = [];
+      const fromFranchises = await supabase.from('franchises').select('id').order('id');
+      if (!fromFranchises.error && fromFranchises.data && fromFranchises.data.length > 0) {
+        list = (fromFranchises.data as { id: string }[]).map((r) => r.id);
+      } else {
+        // 2) Try RPC that returns distinct ids (define it server-side if not present)
+        const fromRpc = await supabase.rpc('get_distinct_franchises');
+        if (!fromRpc.error && fromRpc.data && fromRpc.data.length > 0) {
+          list = (fromRpc.data as any[]).map((r) => (typeof r === 'string' ? r : r.franchise_id));
+        } else {
+          // 3) Fallback: paginate bills and build a distinct list (subject to RLS!)
+          list = await fallbackDistinctFranchisesFromBills();
+        }
+      }
+
+      list = Array.from(new Set(list)).filter(Boolean).sort();
+      setFranchiseList(list);
+
+      // Ensure selectedFranchise is valid for the new list
+      if (list.length > 0 && selectedFranchise && !list.includes(selectedFranchise)) {
+        setSelectedFranchise(''); // reset to "All Franchises" if previously selected is not available
+      }
+
+      // Helpful hint if only one found (often RLS)
+      if (isCentral && list.length <= 1) {
+        toast({
+          title: 'Limited franchise list',
+          description:
+            'Only a single franchise is visible. If you expect more, check your RLS policies or use a central-safe source (table or RPC).',
+        });
+      }
     } catch (error: any) {
       console.error('Error fetching franchise list:', error);
       toast({
-        title: "Error",
-        description: "Failed to fetch franchise list",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Failed to fetch franchise list',
+        variant: 'destructive',
       });
     }
   };
 
-  // ---- NEW: paginate to bypass Supabase's 1k row cap ----
+  const fallbackDistinctFranchisesFromBills = async (): Promise<string[]> => {
+    const pageSize = 1000;
+    let from = 0;
+    const ids = new Set<string>();
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await supabase
+        .from('bills_generated_billing')
+        .select('franchise_id')
+        .order('id', { ascending: true })
+        .range(from, to);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+
+      for (const row of data as { franchise_id: string | null }[]) {
+        if (row.franchise_id) ids.add(row.franchise_id);
+      }
+
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return Array.from(ids);
+  };
+
+  // ---- Paginate to bypass Supabase's 1k row cap ----
   const fetchBillsPaged = async (startISO: string, endISO: string): Promise<BillRow[]> => {
     const pageSize = 1000;
     let from = 0;
@@ -153,7 +242,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   const fetchWeeklyData = async () => {
     setLoading(true);
     try {
-      if (!startDate || !endDate) throw new Error("Please select both start and end dates");
+      if (!startDate || !endDate) throw new Error('Please select both start and end dates');
 
       // Normalize and ensure start <= end
       let s = startDate;
@@ -166,6 +255,15 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
 
       // Fetch *all* bills in the range (with pagination)
       const bills = await fetchBillsPaged(startISO, endISO);
+
+      // PREP: shift start cache so we don't touch localStorage in a hot loop too many times
+      const shiftCache = new Map<string, Date | null>();
+      const getShiftFor = (fid: string) => {
+        if (!shiftCache.has(fid)) {
+          shiftCache.set(fid, getShiftStartForFranchise(fid));
+        }
+        return shiftCache.get(fid) ?? null;
+      };
 
       // Seed day map for each IST date in range
       const dayMap = new Map<string, DayData>();
@@ -196,11 +294,21 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         cur = addDaysYMD(cur, 1);
       }
 
-      // Aggregate bills per IST day
+      // Aggregate bills per IST day, applying signout shift per franchise if active
       for (const bill of bills) {
-        const key = dateKeyFromTimestampIST(bill.created_at);
+        let created = new Date(bill.created_at);
+        const shiftStart = getShiftFor(bill.franchise_id);
+        if (shiftStart && created >= shiftStart) {
+          // Shift this bill by +1 day for display/grouping
+          const shifted = new Date(created);
+          shifted.setDate(shifted.getDate() + 1);
+          created = shifted;
+        }
+
+        const key = dateKeyFromTimestampIST(created.toISOString());
         const row = dayMap.get(key);
-        if (!row) continue; // out of seeded range (shouldn't happen)
+        if (!row) continue; // out of seeded range
+
         row.revenue += Number(bill.total) || 0;
         row.orders += 1;
         row.avgOrderValue = row.orders > 0 ? row.revenue / row.orders : 0;
@@ -208,7 +316,9 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
       }
 
       const filled = Array.from(dayMap.values()).sort(
-        (a, b) => new Date(`${a.date}T00:00:00+05:30`).getTime() - new Date(`${b.date}T00:00:00+05:30`).getTime()
+        (a, b) =>
+          new Date(`${a.date}T00:00:00+05:30`).getTime() -
+          new Date(`${b.date}T00:00:00+05:30`).getTime()
       );
 
       setWeeklyData(filled);
@@ -216,9 +326,9 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
       setTotalOrders(bills.length);
     } catch (error: any) {
       toast({
-        title: "Error",
-        description: error.message || "Failed to fetch weekly performance data",
-        variant: "destructive",
+        title: 'Error',
+        description: error.message || 'Failed to fetch weekly performance data',
+        variant: 'destructive',
       });
       console.error('Error fetching weekly data:', error);
       setWeeklyData([]);
@@ -230,26 +340,28 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
 
   const exportToExcel = () => {
     if (weeklyData.length === 0) {
-      toast({ title: "No Data", description: "There is no data to export", variant: "destructive" });
+      toast({ title: 'No Data', description: 'There is no data to export', variant: 'destructive' });
       return;
     }
 
-    const exportData = weeklyData.map(day => ({
-      'Day': day.dayOfWeek,
+    const exportData = weeklyData.map((day) => ({
+      Day: day.dayOfWeek,
       'Date (IST)': day.date,
       'Revenue (₹)': day.revenue.toFixed(2),
-      'Orders': day.orders,
-      'Avg Order Value (₹)': day.avgOrderValue.toFixed(2)
+      Orders: day.orders,
+      'Avg Order Value (₹)': day.avgOrderValue.toFixed(2),
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Weekly Performance');
 
-    const filename = `weekly-performance-${selectedFranchise || 'all'}-${new Date().toISOString().split('T')[0]}.xlsx`;
+    const filename = `weekly-performance-${selectedFranchise || 'all'}-${
+      new Date().toISOString().split('T')[0]
+    }.xlsx`;
     XLSX.writeFile(workbook, filename);
 
-    toast({ title: "Export Successful", description: "Weekly performance data exported to Excel" });
+    toast({ title: 'Export Successful', description: 'Weekly performance data exported to Excel' });
   };
 
   const totalWeekRevenue = weeklyData.reduce((sum, day) => sum + day.revenue, 0);
@@ -277,8 +389,10 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                     className="border p-2 rounded-md w-full"
                   >
                     <option value="">All Franchises</option>
-                    {franchiseList.map(franchise => (
-                      <option key={franchise} value={franchise}>{franchise}</option>
+                    {franchiseList.map((franchise) => (
+                      <option key={franchise} value={franchise}>
+                        {franchise}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -315,7 +429,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 selectsEnd
                 startDate={startDate}
                 endDate={endDate}
-                minDate={startDate}
+                minDate={startDate || undefined}
                 dateFormat="dd/MM/yyyy"
                 className="border p-2 rounded-md w-full"
                 placeholderText="Select end date"

@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Calendar, Download, ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Calendar, Download, ArrowUpDown, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 
@@ -26,6 +26,11 @@ interface BillHistoryProps {
 type SortField = 'created_at' | 'total' | 'franchise_id' | 'id' | 'mode_payment';
 type SortDirection = 'asc' | 'desc';
 
+type ShiftState = {
+  day: string;      // YYYY-MM-DD of activation (local)
+  startISO: string; // ISO timestamp when shift started
+};
+
 export function BillHistory({ showAdvanced = false, isCentral = false }: BillHistoryProps) {
   const [bills, setBills] = useState<Bill[]>([]);
   const [filteredBills, setFilteredBills] = useState<Bill[]>([]);
@@ -42,11 +47,60 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   const [billItems, setBillItems] = useState<any[]>([]);
   const [itemLoading, setItemLoading] = useState(false);
 
+  // --- Signout-for-today (per-franchise, no undo same day) ---
+  const [shiftStart, setShiftStart] = useState<Date | null>(null);
+  const [shiftActive, setShiftActive] = useState<boolean>(false);
+  const shiftDays = 1;
+
   const { franchiseId, role } = useAuth();
   const { toast } = useToast();
 
+  const todayStrLocal = () => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  // which franchise is the button controlling?
+  const activeFranchiseId: string | null = isCentral
+    ? (selectedFranchise !== 'ALL' ? selectedFranchise : null)
+    : (franchiseId ?? null);
+
+  const shiftKey = (fid: string) => `bill_date_shift_state:${fid}`;
+
+  const loadShiftForFranchise = (fid: string | null) => {
+    setShiftStart(null);
+    setShiftActive(false);
+    if (!fid) return;
+
+    const raw = localStorage.getItem(shiftKey(fid));
+    if (!raw) return;
+
+    try {
+      const parsed: ShiftState = JSON.parse(raw);
+      if (parsed?.day === todayStrLocal() && parsed?.startISO) {
+        const d = new Date(parsed.startISO);
+        if (!Number.isNaN(d.getTime())) {
+          setShiftStart(d);
+          setShiftActive(true);
+        }
+      } else {
+        localStorage.removeItem(shiftKey(fid));
+      }
+    } catch {
+      localStorage.removeItem(shiftKey(fid));
+    }
+  };
+
   useEffect(() => {
-    fetchBills(); // initial load
+    loadShiftForFranchise(activeFranchiseId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFranchiseId]);
+
+  useEffect(() => {
+    fetchBills();
     if (isCentral) fetchFranchiseList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [franchiseId, role]);
@@ -54,7 +108,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   useEffect(() => {
     applyFiltersAndSort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bills, selectedFranchise, fromDate, toDate, sortField, sortDirection]);
+  }, [bills, selectedFranchise, fromDate, toDate, sortField, sortDirection, shiftActive, shiftStart]);
 
   const toInputValue = (d?: Date) =>
     d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
@@ -70,29 +124,82 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     return x.toISOString();
   };
 
+  // ---------- CENTRAL FRANCHISE LIST (RPC first, then fallback) ----------
   const fetchFranchiseList = async () => {
     try {
-      const { data, error } = await supabase
-        .from('bills_generated_billing')
-        .select('franchise_id')
-        .order('franchise_id');
+      // 1) Recommended: central RPC that bypasses RLS (SECURITY DEFINER)
+      const rpc = await supabase.rpc('get_distinct_franchises');
+      let list: string[] = [];
 
-      if (error) throw error;
+      if (!rpc.error && Array.isArray(rpc.data) && rpc.data.length > 0) {
+        // rpc.data can be [{ franchise_id: '0001' }, ...] or just strings depending on your function
+        list = (rpc.data as any[]).map((r) =>
+          typeof r === 'string' ? r : r.franchise_id
+        );
+      } else {
+        // 2) Fallback: paginate the bills table and build distinct list (subject to RLS)
+        list = await fallbackDistinctFranchisesFromBills();
+      }
 
-      const unique = Array.from(new Set(data?.map((item) => item.franchise_id))).filter(Boolean) as string[];
-      setFranchiseList(unique);
+      list = Array.from(new Set(list)).filter(Boolean).sort();
+      setFranchiseList(list);
+
+      // Sanity hint if RLS still restricts results
+      if (list.length <= 1) {
+        toast({
+          title: 'Limited franchise list',
+          description:
+            'Only one (or none) franchise is visible. If you expect more, ensure you created the SECURITY DEFINER RPC (or loosen RLS for central).',
+        });
+      }
+
+      // Keep selection valid
+      if (selectedFranchise !== 'ALL' && !list.includes(selectedFranchise)) {
+        setSelectedFranchise('ALL');
+      }
     } catch (error) {
       console.error('Error fetching franchise list:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to fetch franchise list',
+        variant: 'destructive',
+      });
     }
   };
 
-  // accept optional targetFranchise and optional date range to fetch from DB
+  // Fallback distinct collector (will only return what RLS allows)
+  const fallbackDistinctFranchisesFromBills = async (): Promise<string[]> => {
+    const pageSize = 1000;
+    let from = 0;
+    const ids = new Set<string>();
+
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await supabase
+        .from('bills_generated_billing')
+        .select('franchise_id')
+        .order('id', { ascending: true })
+        .range(from, to);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+
+      for (const row of data as { franchise_id: string | null }[]) {
+        if (row.franchise_id) ids.add(row.franchise_id);
+      }
+
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return Array.from(ids);
+  };
+
   const fetchBills = async (targetFranchise?: string, from?: Date, to?: Date) => {
     setLoading(true);
     try {
       let query = supabase.from('bills_generated_billing').select('*');
 
-      // franchise filter
       if (isCentral) {
         if (targetFranchise && targetFranchise !== 'ALL') {
           query = query.eq('franchise_id', targetFranchise);
@@ -101,7 +208,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         query = query.eq('franchise_id', franchiseId);
       }
 
-      // date range filter (server-side) if both provided
       if (from && to) {
         query = query
           .gte('created_at', startOfDayISO(from))
@@ -144,6 +250,17 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
   };
 
+  // Display date (shift if active today and bill is after shiftStart)
+  const getDisplayDate = (iso: string) => {
+    const original = new Date(iso);
+    if (shiftActive && shiftStart && original >= shiftStart) {
+      const shifted = new Date(original);
+      shifted.setDate(shifted.getDate() + shiftDays);
+      return shifted;
+    }
+    return original;
+  };
+
   const applyFiltersAndSort = () => {
     let filtered = [...bills];
 
@@ -152,13 +269,15 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
 
     if (fromDate) {
-      filtered = filtered.filter((bill) => new Date(bill.created_at) >= new Date(fromDate.setHours(0, 0, 0, 0)));
+      const fromStart = new Date(fromDate);
+      fromStart.setHours(0, 0, 0, 0);
+      filtered = filtered.filter((bill) => getDisplayDate(bill.created_at) >= fromStart);
     }
 
     if (toDate) {
       const end = new Date(toDate);
       end.setHours(23, 59, 59, 999);
-      filtered = filtered.filter((bill) => new Date(bill.created_at) <= end);
+      filtered = filtered.filter((bill) => getDisplayDate(bill.created_at) <= end);
     }
 
     filtered.sort((a, b) => {
@@ -172,8 +291,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         aVal = Number(aVal);
         bVal = Number(bVal);
       } else if (sortField === 'created_at') {
-        aVal = new Date(aVal).getTime();
-        bVal = new Date(bVal).getTime();
+        aVal = getDisplayDate(a.created_at).getTime();
+        bVal = getDisplayDate(b.created_at).getTime();
       }
 
       if (aVal === bVal) return 0;
@@ -184,7 +303,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     setCurrentPage(1);
   };
 
-  // EXPORT ONLY THE SELECTED FRANCHISE (when central)
   const exportToExcel = () => {
     if (isCentral && selectedFranchise === 'ALL') {
       toast({
@@ -208,15 +326,18 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       return;
     }
 
-    const exportData = exportSource.map((bill) => ({
-      'Bill ID': bill.id,
-      'Franchise ID': bill.franchise_id,
-      'Payment Mode': (bill.mode_payment ?? '').toUpperCase(),
-      'Total Amount (₹)': Number(bill.total).toFixed(2),
-      'Created Date': new Date(bill.created_at).toLocaleDateString(),
-      'Created Time': new Date(bill.created_at).toLocaleTimeString(),
-      'Created By': bill.created_by,
-    }));
+    const exportData = exportSource.map((bill) => {
+      const d = getDisplayDate(bill.created_at);
+      return {
+        'Bill ID': bill.id,
+        'Franchise ID': bill.franchise_id,
+        'Payment Mode': (bill.mode_payment ?? '').toUpperCase(),
+        'Total Amount (₹)': Number(bill.total).toFixed(2),
+        'Displayed Date': d.toLocaleDateString(),
+        'Displayed Time': d.toLocaleTimeString(),
+        'Created By': bill.created_by,
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
@@ -264,10 +385,69 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
   const gridCols = isCentral ? 'grid grid-cols-1 sm:grid-cols-6' : 'grid grid-cols-1 sm:grid-cols-5';
 
+  // Activate (no undo same day), scoped to active franchise
+  const activateShift = () => {
+    if (!activeFranchiseId) {
+      toast({
+        title: 'Select a franchise',
+        description: 'Please choose a specific franchise (not “ALL”) to activate signout.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (shiftActive) return;
+    const now = new Date();
+    const state: ShiftState = { day: todayStrLocal(), startISO: now.toISOString() };
+    localStorage.setItem(shiftKey(activeFranchiseId), JSON.stringify(state));
+    setShiftStart(now);
+    setShiftActive(true);
+    toast({
+      title: 'Signout for today active',
+      description: `New bills for ${activeFranchiseId} from now will be shown under tomorrow’s date in this view (for today only).`,
+    });
+    applyFiltersAndSort();
+  };
+
   return (
     <Card className="bg-white">
+      {/* Signout for today (per franchise) */}
+      <div className="px-6 pt-5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="text-sm font-medium mb-1" style={{ color: 'rgb(0, 100, 55)' }}>
+              Signout for today
+            </div>
+            <div className="text-xs text-gray-600">
+              Pressing this button will result in the new bills from now being shown under tomorrow’s date for the selected franchise. This lasts until midnight.
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {shiftActive && shiftStart ? (
+              <Badge
+                variant="outline"
+                className="mr-1"
+                style={{ backgroundColor: 'rgba(0, 100, 55, 0.08)', borderColor: 'rgb(0, 100, 55)', color: 'rgb(0, 100, 55)' }}
+              >
+                {activeFranchiseId ? `${activeFranchiseId}: ` : ''}Active since {shiftStart.toLocaleTimeString()}
+              </Badge>
+            ) : null}
+            <Button
+              onClick={activateShift}
+              style={{ backgroundColor: 'rgb(0, 100, 55)' }}
+              disabled={!activeFranchiseId || shiftActive}
+              title={
+                !activeFranchiseId
+                  ? 'Select a specific franchise to activate'
+                  : (shiftActive ? 'Already active for today' : 'Shift future bills to tomorrow (display only)')
+              }
+            >
+              <LogOut className="h-4 w-4 mr-2" /> Signout for today
+            </Button>
+          </div>
+        </div>
+      </div>
+
       <CardHeader className="border-b">
-        {/* Heading + Date Range on the right */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="flex items-center gap-2">
             <Calendar className="h-5 w-5" style={{ color: 'rgb(0, 100, 55)' }} />
@@ -282,7 +462,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
             )}
           </CardTitle>
 
-          {/* Date pickers beside the heading */}
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex flex-col">
               <label className="text-xs text-gray-600 mb-1">From</label>
@@ -305,7 +484,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
               />
             </div>
 
-            {/* Server-side fetch for this range (central mode) */}
             {isCentral && (
               <Button
                 onClick={() => fetchBills(selectedFranchise, fromDate, toDate)}
@@ -317,7 +495,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
               </Button>
             )}
 
-            {/* Quick clear */}
             {(fromDate || toDate) && (
               <Button
                 variant="outline"
@@ -336,7 +513,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       </CardHeader>
 
       <CardContent className="bg-white">
-        {/* FILTER BAR: Franchise selector + Get Bills */}
         {isCentral && (
           <div className="mt-6 sm:mt-8 flex flex-wrap items-center gap-3 mb-4">
             <label className="text-sm font-medium" style={{ color: 'rgb(0, 100, 55)' }}>
@@ -375,46 +551,21 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           <div className="space-y-4">
             <div className="overflow-x-auto w-full">
               <div className={`${gridCols} gap-4 p-4 bg-gray-50 rounded-lg font-medium min-w-[600px]`}>
-                <Button
-                  variant="ghost"
-                  onClick={() => handleSort('id')}
-                  className="justify-start h-auto p-0"
-                  style={{ color: 'rgb(0, 100, 55)' }}
-                >
+                <Button variant="ghost" onClick={() => handleSort('id')} className="justify-start h-auto p-0" style={{ color: 'rgb(0, 100, 55)' }}>
                   Bill ID <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
                 {isCentral && (
-                  <Button
-                    variant="ghost"
-                    onClick={() => handleSort('franchise_id')}
-                    className="justify-start h-auto p-0"
-                    style={{ color: 'rgb(0, 100, 55)' }}
-                  >
+                  <Button variant="ghost" onClick={() => handleSort('franchise_id')} className="justify-start h-auto p-0" style={{ color: 'rgb(0, 100, 55)' }}>
                     Franchise <ArrowUpDown className="ml-1 h-3 w-3" />
                   </Button>
                 )}
-                <Button
-                  variant="ghost"
-                  onClick={() => handleSort('mode_payment')}
-                  className="justify-start h-auto p-0"
-                  style={{ color: 'rgb(0, 100, 55)' }}
-                >
+                <Button variant="ghost" onClick={() => handleSort('mode_payment')} className="justify-start h-auto p-0" style={{ color: 'rgb(0, 100, 55)' }}>
                   Payment Mode <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => handleSort('total')}
-                  className="justify-start h-auto p-0"
-                  style={{ color: 'rgb(0, 100, 55)' }}
-                >
+                <Button variant="ghost" onClick={() => handleSort('total')} className="justify-start h-auto p-0" style={{ color: 'rgb(0, 100, 55)' }}>
                   Amount <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => handleSort('created_at')}
-                  className="justify-start h-auto p-0 sm:col-span-2"
-                  style={{ color: 'rgb(0, 100, 55)' }}
-                >
+                <Button variant="ghost" onClick={() => handleSort('created_at')} className="justify-start h-auto p-0 sm:col-span-2" style={{ color: 'rgb(0, 100, 55)' }}>
                   Date <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
               </div>
@@ -422,53 +573,49 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
             <div className="overflow-x-auto w-full">
               <div className="space-y-2 min-w-[600px]">
-                {currentBills.map((bill) => (
-                  <div
-                    key={bill.id}
-                    className={`${gridCols} gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors text-sm sm:text-base`}
-                  >
-                    <div className="break-words min-w-0">
-                      <Button
-                        variant="link"
-                        className="p-0 text-left font-medium underline"
-                        style={{ color: 'rgb(0, 100, 55)' }}
-                        onClick={() => fetchBillItems(bill.id)}
-                      >
-                        #{bill.id}
-                      </Button>
-                    </div>
-                    {isCentral && (
+                {currentBills.map((bill) => {
+                  const displayDate = getDisplayDate(bill.created_at);
+                  return (
+                    <div key={bill.id} className={`${gridCols} gap-4 p-4 border rounded-lg hover:bg-gray-50 transition-colors text-sm sm:text-base`}>
+                      <div className="break-words min-w-0">
+                        <Button
+                          variant="link"
+                          className="p-0 text-left font-medium underline"
+                          style={{ color: 'rgb(0, 100, 55)' }}
+                          onClick={() => fetchBillItems(bill.id)}
+                        >
+                          #{bill.id}
+                        </Button>
+                      </div>
+                      {isCentral && (
+                        <div className="break-words min-w-0">
+                          <Badge variant="outline" className="w-fit" style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}>
+                            {bill.franchise_id}
+                          </Badge>
+                        </div>
+                      )}
                       <div className="break-words min-w-0">
                         <Badge
-                          variant="outline"
-                          className="w-fit"
-                          style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}
+                          variant={getPaymentBadgeVariant(bill.mode_payment)}
+                          style={{
+                            backgroundColor: (bill.mode_payment ?? '').toLowerCase() === 'cash' ? 'rgb(0, 100, 55)' : undefined,
+                            color: (bill.mode_payment ?? '').toLowerCase() === 'cash' ? 'white' : 'rgb(0, 100, 55)',
+                          }}
                         >
-                          {bill.franchise_id}
+                          {(bill.mode_payment ?? '').toUpperCase()}
                         </Badge>
                       </div>
-                    )}
-                    <div className="break-words min-w-0">
-                      <Badge
-                        variant={getPaymentBadgeVariant(bill.mode_payment)}
-                        style={{
-                          backgroundColor: (bill.mode_payment ?? '').toLowerCase() === 'cash' ? 'rgb(0, 100, 55)' : undefined,
-                          color: (bill.mode_payment ?? '').toLowerCase() === 'cash' ? 'white' : 'rgb(0, 100, 55)',
-                        }}
-                      >
-                        {(bill.mode_payment ?? '').toUpperCase()}
-                      </Badge>
+                      <div className="font-bold break-words min-w-0" style={{ color: 'rgb(0, 100, 55)' }}>
+                        ₹{Number(bill.total).toFixed(2)}
+                      </div>
+                      <div className="text-sm text-gray-600 sm:col-span-2 break-words min-w-0">
+                        {displayDate.toLocaleDateString()}
+                        <br />
+                        <span className="text-xs">{displayDate.toLocaleTimeString()}</span>
+                      </div>
                     </div>
-                    <div className="font-bold break-words min-w-0" style={{ color: 'rgb(0, 100, 55)' }}>
-                      ₹{Number(bill.total).toFixed(2)}
-                    </div>
-                    <div className="text-sm text-gray-600 sm:col-span-2 break-words min-w-0">
-                      {new Date(bill.created_at).toLocaleDateString()}
-                      <br />
-                      <span className="text-xs">{new Date(bill.created_at).toLocaleTimeString()}</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
