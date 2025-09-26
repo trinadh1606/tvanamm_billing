@@ -12,7 +12,7 @@ import {
   CardContent, CardFooter
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Download, Key, UserPlus } from 'lucide-react';
+import { Download, Key, UserPlus, Clock } from 'lucide-react';
 import { useState } from 'react';
 import {
   Dialog, DialogContent, DialogHeader,
@@ -22,8 +22,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-
-
 
 function normalizeFranchiseIdFlexible(input: string) {
   let raw = String(input || '').trim();
@@ -266,7 +264,7 @@ export function CentralDashboard() {
       <Tabs defaultValue="overview" className="w-full px-2 sm:px-4 py-4">
         {/* Improved tabs layout with better alignment */}
         <TabsList
-          className="grid grid-cols-2 sm:grid-cols-6 w-full gap-1.5 items-stretch h-auto min-h-[40px] sm:min-h-[44px]"
+          className="grid grid-cols-2 sm:grid-cols-6 w-full gap-1.5 items-stretch h-auto min-h[40px] sm:min-h-[44px]"
           style={{ backgroundColor: themeColorLight }}
         >
           {[
@@ -292,8 +290,24 @@ export function CentralDashboard() {
         <TabsContent value="menu" className="mt-4"><MenuManager isCentral /></TabsContent>
         <TabsContent value="bills" className="mt-4"><BillHistory showAdvanced isCentral /></TabsContent>
 
-        {/* Stock Management tab content (empty placeholder) */}
-        <TabsContent value="stock" className="mt-4"></TabsContent>
+        {/* Stock Management tab content (coming soon placeholder) */}
+        <TabsContent value="stock" className="mt-4">
+          <Card className="border-[rgb(0,100,55)] p-6">
+            <CardHeader className="flex items-center gap-3">
+              <Clock className="w-6 h-6" style={{ color: themeColor }} />
+              <div>
+                <CardTitle style={{ color: themeColor }}>Stock Management</CardTitle>
+                <CardDescription>Coming soon</CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                We’re building a streamlined stock/inventory module with purchase tracking,
+                low-stock alerts, and reports. Stay tuned!
+              </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="settings" className="mt-4 space-y-4">
           {[{
