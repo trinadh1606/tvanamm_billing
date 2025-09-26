@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -54,7 +54,6 @@ const buildFranchiseIdVariants = (raw: string) => {
     out.add(digits);     // 0002
     out.add(noPad);      // 2
     out.add(padded4);    // 0002 (normalized width)
-    // intentionally not adding FR-2
   } else {
     const noPad = id.replace(/^0+/, '') || '0';
     const padded4 = id.padStart(4, '0');
@@ -63,7 +62,6 @@ const buildFranchiseIdVariants = (raw: string) => {
     out.add(padded4);                   // "0002"
     out.add(`FR-${id.toUpperCase()}`);  // "FR-0002" if typed "0002"
     out.add(`FR-${padded4}`);           // "FR-0002"
-    // intentionally not adding FR-2
   }
   return Array.from(out);
 };
@@ -73,6 +71,31 @@ const resolveFranchiseIdForQuery = (input: string, existingIds: string[]) => {
   const variants = buildFranchiseIdVariants(input).map(v => v.toUpperCase());
   const found = existingIds.find(dbId => variants.includes((dbId || '').toUpperCase()));
   return found || input.trim();
+};
+
+// ---------- NEW: Sort franchises ascending (numeric first, then alphabetic) ----------
+const sortFranchisesAsc = (ids: string[]) => {
+  const key = (s: string) => {
+    const up = (s || '').trim().toUpperCase();
+    // Try to extract numeric portion
+    let num: number | null = null;
+    if (up.startsWith('FR-')) {
+      const rest = up.slice(3);
+      if (/^\d+$/.test(rest)) num = parseInt(rest, 10);
+    } else if (/^\d+$/.test(up)) {
+      num = parseInt(up, 10);
+    }
+    return { up, num, hasNum: num !== null };
+  };
+
+  return [...ids].sort((a, b) => {
+    const A = key(a);
+    const B = key(b);
+    if (A.hasNum && B.hasNum) return (A.num as number) - (B.num as number);
+    if (A.hasNum && !B.hasNum) return -1; // numeric ids first
+    if (!A.hasNum && B.hasNum) return 1;
+    return A.up.localeCompare(B.up);
+  });
 };
 
 export function MenuManager({ isCentral = false }: MenuManagerProps) {
@@ -176,7 +199,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
         .select('franchise_id')
         .order('franchise_id', { ascending: true });
 
-      if (error) throw error;
+    if (error) throw error;
 
       const map = new Map<string, string>();
       (data ?? []).forEach((row: any) => {
@@ -186,7 +209,10 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
         const key = cleaned.toUpperCase();
         if (!map.has(key)) map.set(key, cleaned);
       });
-      setAvailableFranchises(Array.from(map.values()));
+
+      // Sort ascending (numeric ids first by number, then alphabetic)
+      const unique = Array.from(map.values());
+      setAvailableFranchises(sortFranchisesAsc(unique));
     } catch (error) {
       console.error('Error fetching franchises:', error);
       toast({ title: 'Error', description: 'Failed to fetch available franchises', variant: 'destructive' });
@@ -359,6 +385,12 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
     return acc;
   }, {} as Record<string, MenuItem[]>);
 
+  // Use memoized, ascending-sorted list for the dropdown
+  const sortedFranchises = useMemo(
+    () => sortFranchisesAsc(availableFranchises),
+    [availableFranchises]
+  );
+
   return (
     <Card>
       <CardHeader>
@@ -485,7 +517,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                   <SelectValue placeholder={fetchingFranchises ? 'Loading franchises...' : 'Select a franchise'} />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableFranchises.map(frId => (
+                  {sortedFranchises.map(frId => (
                     <SelectItem key={frId} value={frId}>
                       {formatFranchiseLabel(frId)}
                     </SelectItem>
