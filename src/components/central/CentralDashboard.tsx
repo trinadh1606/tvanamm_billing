@@ -264,20 +264,38 @@ export function CentralDashboard() {
   return (
     <DashboardLayout title={titleWithLogo}>
       <Tabs defaultValue="overview" className="w-full px-2 sm:px-4 py-4">
-        <TabsList className="flex flex-wrap sm:grid sm:grid-cols-5 gap-1 w-full" style={{ backgroundColor: themeColorLight }}>
-          <TabsTrigger value="overview" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Overview</TabsTrigger>
-          <TabsTrigger value="weekly" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Analysis</TabsTrigger>
-          <TabsTrigger value="menu" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Master Menu</TabsTrigger>
-          <TabsTrigger value="bills" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">All Bills</TabsTrigger>
-          <TabsTrigger value="settings" className="data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)]">Settings</TabsTrigger>
+        {/* Improved tabs layout with better alignment */}
+        <TabsList
+          className="grid grid-cols-2 sm:grid-cols-6 w-full gap-1.5 items-stretch h-auto min-h-[40px] sm:min-h-[44px]"
+          style={{ backgroundColor: themeColorLight }}
+        >
+          {[
+            { value: 'overview', label: 'Overview' },
+            { value: 'weekly', label: 'Analysis' },
+            { value: 'menu', label: 'Master Menu' },
+            { value: 'bills', label: 'All Bills' },
+            { value: 'stock', label: 'Stock Management' },
+            { value: 'settings', label: 'Settings' },
+          ].map(({ value, label }) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              className="w-full h-10 sm:h-11 justify-center rounded-md text-sm sm:text-base data-[state=active]:bg-white data-[state=active]:text-[rgb(0,100,55)] py-2 px-1 flex items-center transition-all duration-200 hover:bg-white/50"
+            >
+              <span className="text-center whitespace-nowrap overflow-hidden text-ellipsis">{label}</span>
+            </TabsTrigger>
+          ))}
         </TabsList>
 
-        <TabsContent value="overview"><FRCentralDashboard /></TabsContent>
-        <TabsContent value="weekly"><WeeklyPerformanceChart isCentral userFranchiseId={''} /></TabsContent>
-        <TabsContent value="menu"><MenuManager isCentral /></TabsContent>
-        <TabsContent value="bills"><BillHistory showAdvanced isCentral /></TabsContent>
+        <TabsContent value="overview" className="mt-4"><FRCentralDashboard /></TabsContent>
+        <TabsContent value="weekly" className="mt-4"><WeeklyPerformanceChart isCentral userFranchiseId={''} /></TabsContent>
+        <TabsContent value="menu" className="mt-4"><MenuManager isCentral /></TabsContent>
+        <TabsContent value="bills" className="mt-4"><BillHistory showAdvanced isCentral /></TabsContent>
 
-        <TabsContent value="settings" className="space-y-4">
+        {/* Stock Management tab content (empty placeholder) */}
+        <TabsContent value="stock" className="mt-4"></TabsContent>
+
+        <TabsContent value="settings" className="mt-4 space-y-4">
           {[{
             icon: UserPlus,
             title: "Register",
