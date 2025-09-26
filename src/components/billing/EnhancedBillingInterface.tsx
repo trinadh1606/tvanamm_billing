@@ -51,6 +51,38 @@ interface BillItem {
   menuItemId?: number;
 }
 
+// ----- Helpers to handle franchise id variants -----
+// Canonical form: "FR-0000" for numeric ids, keep "FR-CENTRAL" and "FR-XXXX" as-is (zero-pad numeric suffix)
+const canonicalFrId = (raw?: string) => {
+  const id = (raw || '').trim();
+  if (!id) return '';
+  const up = id.toUpperCase();
+  if (up === 'FR-CENTRAL') return 'FR-CENTRAL';
+  if (up.startsWith('FR-')) {
+    const numPart = up.slice(3);
+    if (/^\d+$/.test(numPart)) {
+      const n = String(parseInt(numPart, 10));
+      return `FR-${n.padStart(4, '0')}`;
+    }
+    return up;
+  }
+  if (/^\d+$/.test(id)) {
+    const n = String(parseInt(id, 10));
+    return `FR-${n.padStart(4, '0')}`;
+  }
+  return up;
+};
+
+// For querying: try canonical ("FR-0002"), the zero-padded numeric ("0002"), and the non-padded numeric ("2")
+const idsToTry = (raw?: string) => {
+  const canon = canonicalFrId(raw);
+  if (!canon) return [];
+  if (canon === 'FR-CENTRAL') return [canon];
+  const num4 = canon.slice(3); // e.g. "0002"
+  const numNoPad = String(parseInt(num4, 10)); // "2"
+  return Array.from(new Set([canon, num4, numNoPad]));
+};
+
 export function EnhancedBillingInterface() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [billItems, setBillItems] = useState<BillItem[]>([]);
@@ -79,21 +111,37 @@ export function EnhancedBillingInterface() {
   }, [franchiseId]);
 
   const fetchMenuItems = async () => {
-    if (!franchiseId) return;
+    const chosen = (franchiseId || '').trim();
+    if (!chosen) return;
 
-    const { data, error } = await supabase
-      .from('menu_items')
-      .select('*')
-      .eq('franchise_id', franchiseId);
+    setLoading(true);
+    try {
+      const tryIds = idsToTry(chosen);
+      const { data, error } = await supabase
+        .from('menu_items')
+        .select('*')
+        .in('franchise_id', tryIds)
+        .order('category', { ascending: true })
+        .order('name', { ascending: true });
 
-    if (error) {
+      if (error) throw error;
+
+      setMenuItems(data || []);
+
+      if (!data || data.length === 0) {
+        toast({
+          title: 'No items found',
+          description: `Tried IDs: ${tryIds.join(', ')}`
+        });
+      }
+    } catch (e: any) {
       toast({
         title: 'Error',
-        description: 'Failed to load menu items',
+        description: e.message || 'Failed to load menu items',
         variant: 'destructive'
       });
-    } else {
-      setMenuItems(data || []);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -155,7 +203,7 @@ export function EnhancedBillingInterface() {
       const { data: billData, error: billError } = await supabase
         .from('bills_generated_billing')
         .insert({
-          franchise_id: franchiseId,
+          franchise_id: canonicalFrId(franchiseId), // save canonical form
           mode_payment: paymentMode,
           created_by: user?.id,
           total
@@ -170,7 +218,7 @@ export function EnhancedBillingInterface() {
         menu_item_id: item.menuItemId || 0,
         qty: item.quantity,
         price: item.price,
-        franchise_id: franchiseId,
+        franchise_id: canonicalFrId(franchiseId),
         item_name: item.name
       }));
 
