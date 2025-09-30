@@ -249,89 +249,126 @@ export function useBluetoothPrinter() {
     }
   }, [connectedPrinter, toast]);
 
-  const formatReceipt = (billData: any) => {
-    const { items, total, paymentMode, billNumber, date } = billData;
-    
+  // ---------- ESC/POS helpers ----------
+  const ESC = '\x1B';
+  const GS  = '\x1D';
+  const INIT = ESC + '@';
+  const ALIGN_LEFT   = ESC + 'a' + '\x00';
+  const ALIGN_CENTER = ESC + 'a' + '\x01';
+  const ALIGN_RIGHT  = ESC + 'a' + '\x02';
+  const BOLD_ON  = ESC + 'E' + '\x01';
+  const BOLD_OFF = ESC + 'E' + '\x00';
+  const PAPER_CUT = GS + 'V' + '\x00'; // Full cut (common variant)
+  const NEWLINE = '\n';
+  const COLS = 32; // typical 58mm printer character width
+
+  // Helper function to pad text for alignment
+  const padText = (text: string, width: number, align: 'left' | 'right' = 'left') => {
+    const str = (text ?? '').toString();
+    if (str.length >= width) return str.substring(0, width);
+    const padding = ' '.repeat(width - str.length);
+    return align === 'left' ? str + padding : padding + str;
+  };
+
+  // Enhanced amount formatting with debugging
+  const formatAmount = (price: any, quantity: any) => {
+    const numPrice = parseFloat(String(price)) || 0;
+    const numQty = parseInt(String(quantity)) || 0;
+    const total = numPrice * numQty;
+    console.log(`Format Amount Debug - Price: ${price} (${typeof price}) -> ${numPrice}, Qty: ${quantity} (${typeof quantity}) -> ${numQty}, Total: ${total}`);
+    return total.toFixed(2);
+  };
+
+  // ESC/POS receipt formatter (used for Bluetooth printing)
+  const formatReceiptEscPos = (billData: any) => {
+    const {
+      items = [],
+      total = 0,
+      paymentMode = '',
+      billNumber = '',
+      date = Date.now()
+    } = billData ?? {};
+
     // Debug log to check data
-    console.log('Receipt Data:', { items, total, paymentMode });
-    items.forEach((item: any, index: number) => {
+    console.log('Receipt Data:', { items, total, paymentMode, billNumber });
+    (items || []).forEach((item: any, index: number) => {
       console.log(`Item ${index}:`, { 
-        name: item.name, 
-        price: item.price, 
-        quantity: item.quantity,
-        priceType: typeof item.price,
-        quantityType: typeof item.quantity
+        name: item?.name, 
+        price: item?.price, 
+        quantity: item?.quantity,
+        priceType: typeof item?.price,
+        quantityType: typeof item?.quantity
       });
     });
-    
-    // ESC/POS commands for EPOS printers
-    const ESC = '\x1B';
-    const GS = '\x1D';
-    const INIT = ESC + '@';
-    const CENTER = ESC + 'a1';
-    const LEFT = ESC + 'a0';
-    const BOLD_ON = ESC + 'E1';
-    const BOLD_OFF = ESC + 'E0';
-    
-    // Proper EPOS termination commands
-    const PAPER_CUT = GS + 'V' + '\x00';  // Full cut command for EPOS
-    const BUFFER_CLEAR = '\x10' + '\x04' + '\x01';  // Clear buffer
-    const NEWLINE = '\n';
-    
-    // Helper function to pad text for alignment
-    const padText = (text: string, width: number, align: 'left' | 'right' = 'left') => {
-      if (text.length >= width) return text.substring(0, width);
-      const padding = ' '.repeat(width - text.length);
-      return align === 'left' ? text + padding : padding + text;
-    };
-    
-    // Enhanced amount formatting with debugging
-    const formatAmount = (price: any, quantity: any) => {
-      // Force conversion to numbers and handle edge cases
-      const numPrice = parseFloat(String(price)) || 0;
-      const numQty = parseInt(String(quantity)) || 0;
-      const total = numPrice * numQty;
-      console.log(`Format Amount Debug - Price: ${price} (${typeof price}) -> ${numPrice}, Qty: ${quantity} (${typeof quantity}) -> ${numQty}, Total: ${total}`);
-      return total.toFixed(2);
-    };
-    
+
     let receipt = INIT;
-    receipt += CENTER + BOLD_ON + 'T VANAMM' + BOLD_OFF + NEWLINE;
-    receipt += LEFT + `Date: ${new Date(date).toLocaleString()}` + NEWLINE;
-    receipt += LEFT + `Payment: ${paymentMode.toUpperCase()}` + NEWLINE;
-    receipt += LEFT + '--------------------------------' + NEWLINE;
-    receipt += LEFT + BOLD_ON + 'ITEM                QTY   AMOUNT' + BOLD_OFF + NEWLINE;
-    receipt += LEFT + '--------------------------------' + NEWLINE;
-    
+    receipt += ALIGN_CENTER + BOLD_ON + 'T VANAMM' + BOLD_OFF + NEWLINE;
+    receipt += ALIGN_LEFT + `Date: ${new Date(date).toLocaleString()}` + NEWLINE;
+    receipt += ALIGN_LEFT + `Payment: ${paymentMode.toString().toUpperCase()}` + NEWLINE;
+    receipt += ALIGN_LEFT + '-'.repeat(COLS) + NEWLINE;
+    receipt += ALIGN_LEFT + BOLD_ON + 'ITEM                QTY   AMOUNT' + BOLD_OFF + NEWLINE;
+    receipt += ALIGN_LEFT + '-'.repeat(COLS) + NEWLINE;
+
     items.forEach((item: any) => {
-      const itemTotal = formatAmount(item.price, item.quantity);
-      const itemName = padText(item.name, 16);
-      const qty = padText(String(item.quantity), 3, 'right');
+      const itemTotal = formatAmount(item?.price, item?.quantity);
+      const itemName = padText(item?.name ?? '', 16);
+      const qty = padText(String(item?.quantity ?? 0), 3, 'right');
       const amount = padText(`Rs${itemTotal}`, 7, 'right');
-      
       console.log(`Receipt Line: "${itemName} ${qty}  ${amount}"`);
-      receipt += LEFT + `${itemName} ${qty}  ${amount}` + NEWLINE;
+      receipt += ALIGN_LEFT + `${itemName} ${qty}  ${amount}` + NEWLINE;
     });
-    
+
     const totalFormatted = (parseFloat(String(total)) || 0).toFixed(2);
     console.log(`Total formatted: ${totalFormatted} from ${total} (${typeof total})`);
-    
-    receipt += LEFT + '--------------------------------' + NEWLINE;
-    receipt += LEFT + BOLD_ON + `TOTAL:              Rs${totalFormatted}` + BOLD_OFF + NEWLINE;
-    receipt += LEFT + '--------------------------------' + NEWLINE;
-    receipt += CENTER + 'Thank you for your visit!' + NEWLINE;
+
+    receipt += ALIGN_LEFT + '-'.repeat(COLS) + NEWLINE;
+    receipt += ALIGN_LEFT + BOLD_ON + `TOTAL:              Rs${totalFormatted}` + BOLD_OFF + NEWLINE;
+    receipt += ALIGN_LEFT + '-'.repeat(COLS) + NEWLINE;
+    receipt += ALIGN_CENTER + 'Thank you for your visit!' + NEWLINE;
     receipt += NEWLINE; // One line feed only
     receipt += PAPER_CUT; // Full cut command
-    receipt += BUFFER_CLEAR; // Clear printer buffer to stop rolling
-    
-    console.log('Final receipt string length:', receipt.length);
+    // NOTE: removed DLE EOT 1 (status query) that was mislabeled as "clear buffer"
+
+    console.log('Final ESC/POS receipt string length:', receipt.length);
     return receipt;
+  };
+
+  // Plain-text receipt formatter (used for PDF/system/email fallbacks)
+  const formatReceiptPlain = (billData: any) => {
+    const {
+      items = [],
+      total = 0,
+      paymentMode = '',
+      billNumber = '',
+      date = Date.now()
+    } = billData ?? {};
+
+    const lines: string[] = [];
+    lines.push('T VANAMM');
+    lines.push(`Date: ${new Date(date).toLocaleString()}`);
+    lines.push(`Payment: ${paymentMode.toString().toUpperCase()}`);
+    lines.push('-'.repeat(COLS));
+    lines.push('ITEM                QTY   AMOUNT');
+    lines.push('-'.repeat(COLS));
+    for (const it of items) {
+      const name = padText(it?.name ?? '', 16);
+      const qty  = padText(String(it?.quantity ?? 0), 3, 'right');
+      const amt  = formatAmount(it?.price, it?.quantity);
+      const amount = padText(`Rs${amt}`, 7, 'right');
+      lines.push(`${name} ${qty}  ${amount}`);
+    }
+    const totalNum = (parseFloat(String(total)) || 0).toFixed(2);
+    lines.push('-'.repeat(COLS));
+    lines.push(`TOTAL:              Rs${totalNum}`);
+    lines.push('-'.repeat(COLS));
+    lines.push('Thank you for your visit!');
+    return lines.join('\n');
   };
 
   // Fallback printing methods
   const fallbackOptions: PrintFallbackOptions = {
     generatePDF: (billData: any) => {
-      const receiptText = formatReceipt(billData);
+      const receiptText = formatReceiptPlain(billData);
       const printWindow = window.open('', '_blank');
       if (printWindow) {
         printWindow.document.write(`
@@ -348,7 +385,7 @@ export function useBluetoothPrinter() {
     },
     
     copyToClipboard: (billData: any) => {
-      const receiptText = formatReceipt(billData);
+      const receiptText = formatReceiptPlain(billData);
       navigator.clipboard.writeText(receiptText).then(() => {
         toast({
           title: "Receipt Copied",
@@ -364,7 +401,7 @@ export function useBluetoothPrinter() {
     },
     
     printToSystemPrinter: (billData: any) => {
-      const receiptText = formatReceipt(billData);
+      const receiptText = formatReceiptPlain(billData);
       const printWindow = window.open('', '_blank');
       if (printWindow) {
         printWindow.document.write(`
@@ -388,10 +425,10 @@ export function useBluetoothPrinter() {
     },
     
     emailReceipt: (billData: any) => {
-      const receiptText = formatReceipt(billData);
-      const subject = `Receipt - Bill #${billData.billNumber}`;
+      const receiptText = formatReceiptPlain(billData);
+      const subject = `Receipt - Bill #${(billData?.billNumber ?? '').toString()}`;
       const body = encodeURIComponent(receiptText);
-      window.open(`mailto:?subject=${subject}&body=${body}`);
+      window.open(`mailto:?subject=${encodeURIComponent(subject)}&body=${body}`);
     }
   };
 
@@ -412,15 +449,31 @@ export function useBluetoothPrinter() {
 
     setIsPrinting(true);
     try {
-      const receiptText = formatReceipt(billData);
+      const receiptText = formatReceiptEscPos(billData);
       const encoder = new TextEncoder();
       const data = encoder.encode(receiptText);
+
+      // Prefer writeWithoutResponse when supported (TS-safe feature detection)
+      type MaybeWriter = {
+        properties?: { writeWithoutResponse?: boolean }; // some browsers expose this
+        writeValueWithoutResponse?: (data: BufferSource) => Promise<void>;
+        writeValue: (data: BufferSource) => Promise<void>;
+      };
+      const ch = connectedPrinter.characteristic as unknown as MaybeWriter;
+
+      const canWriteWithoutResponse =
+        !!ch.properties?.writeWithoutResponse ||
+        typeof ch.writeValueWithoutResponse === 'function';
+
+      const write = canWriteWithoutResponse && ch.writeValueWithoutResponse
+        ? (chunk: BufferSource) => ch.writeValueWithoutResponse!(chunk)
+        : (chunk: BufferSource) => ch.writeValue(chunk);
       
-      // Send data in chunks to improve stability
+      // Send data in chunks to improve stability (BLE payload ~20 bytes)
       const chunkSize = 20;
       for (let i = 0; i < data.length; i += chunkSize) {
         const chunk = data.slice(i, i + chunkSize);
-        await connectedPrinter.characteristic.writeValue(chunk);
+        await write(chunk);
         // Small delay between chunks for stability
         await new Promise(resolve => setTimeout(resolve, 50));
       }

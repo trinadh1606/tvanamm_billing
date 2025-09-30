@@ -12,7 +12,7 @@ import {
   CardContent, CardFooter
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Download, Key, UserPlus, Clock } from 'lucide-react';
+import { Download, Key, UserPlus, Clock, Users } from 'lucide-react';
 import { useState } from 'react';
 import {
   Dialog, DialogContent, DialogHeader,
@@ -38,6 +38,12 @@ function normalizeFranchiseIdFlexible(input: string) {
   return { formatted, alias, isDigitsOnly, raw: alnum };
 }
 
+// Simple phone validator: allows +, spaces, hyphens; requires 7–15 digits total
+function isValidPhone(p: string) {
+  const digits = (p || '').replace(/\D/g, '');
+  return digits.length >= 7 && digits.length <= 15;
+}
+
 // Frontend store email domain (optional, for registration).
 // Keep in sync with server STORE_EMAIL_DOMAIN; server also falls back to wildcard.
 const STORE_EMAIL_DOMAIN: string =
@@ -46,6 +52,7 @@ const STORE_EMAIL_DOMAIN: string =
 export function CentralDashboard() {
   const [isRegisterDialogOpen, setIsRegisterDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [isUsersDialogOpen, setIsUsersDialogOpen] = useState(false);
 
   // Success dialog state
   const [isSuccessDialogOpen, setIsSuccessDialogOpen] = useState(false);
@@ -55,7 +62,9 @@ export function CentralDashboard() {
     name: '',
     email: '',
     franchiseId: '',
-    password: ''
+    password: '',
+    phone: '',
+    address: ''
   });
   const [franchiseId, setFranchiseId] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -65,13 +74,25 @@ export function CentralDashboard() {
   // REGISTER NEW USER (stay on same page, show popup)
   // -------------------
   const handleRegister = async () => {
-    if (!registerForm.name || !registerForm.email || !registerForm.franchiseId || !registerForm.password) {
+    if (
+      !registerForm.name ||
+      !registerForm.email ||
+      !registerForm.franchiseId ||
+      !registerForm.password ||
+      !registerForm.phone ||
+      !registerForm.address
+    ) {
       toast({ title: "Error", description: "Please fill all fields", variant: "destructive" });
       return;
     }
 
     if (registerForm.password.length < 8) {
       toast({ title: "Error", description: "Password must be at least 8 characters", variant: "destructive" });
+      return;
+    }
+
+    if (!isValidPhone(registerForm.phone)) {
+      toast({ title: "Error", description: "Please enter a valid phone number (7–15 digits)", variant: "destructive" });
       return;
     }
 
@@ -131,12 +152,14 @@ export function CentralDashboard() {
       }
       const mainUserId = userData.user.id;
 
-      // 5) Insert profile for the main user (stores FR-<...>)
+      // 5) Insert profile for the main user (stores FR-<...>) with phone & address
       const { error: insertError } = await supabase.from('profiles').insert([{
         id: mainUserId,
         name: registerForm.name,
         email: registerForm.email, // original email (no +alias)
         franchise_id: formatted,
+        phone: registerForm.phone,
+        address: registerForm.address
       }]);
       if (insertError) {
         toast({ title: "Error", description: insertError.message, variant: "destructive" });
@@ -156,7 +179,7 @@ export function CentralDashboard() {
 
       // 7) Close the form and show success popup (no navigation)
       setIsRegisterDialogOpen(false);
-      setRegisterForm({ name: "", email: "", franchiseId: "", password: "" });
+      setRegisterForm({ name: "", email: "", franchiseId: "", password: "", phone: "", address: "" });
       setSuccessMessage(`User and store accounts created successfully for ${formatted}.`);
       setIsSuccessDialogOpen(true);
 
@@ -310,29 +333,42 @@ export function CentralDashboard() {
         </TabsContent>
 
         <TabsContent value="settings" className="mt-4 space-y-4">
-          {[{
-            icon: UserPlus,
-            title: "Register",
-            description: "Create a new user account",
-            content: "Register new franchise managers or system administrators.",
-            buttonLabel: "Register User",
-            onClick: () => setIsRegisterDialogOpen(true)
-          }, {
-            icon: Key,
-            title: "Change Password",
-            description: "Update your account password",
-            content: "Ensure your account is secure by regularly updating your password.",
-            buttonLabel: "Change Password",
-            onClick: () => setIsPasswordDialogOpen(true)
-          }, {
-            icon: Download,
-            title: "Download Manual",
-            description: "Get the complete system documentation",
-            content: "Download the latest version of the system manual for reference.",
-            buttonLabel: "Download PDF",
-            variant: "outline" as const,
-            iconComponent: <Download className="mr-2 h-4 w-4" style={{ color: themeColor }} />
-          }].map(({ icon: Icon, title, description, content, buttonLabel, onClick, variant = "default" as const, iconComponent }, i) => (
+          {[
+            {
+              icon: UserPlus,
+              title: "Register",
+              description: "Create a new user account",
+              content: "Register new franchise managers or system administrators.",
+              buttonLabel: "Register User",
+              onClick: () => setIsRegisterDialogOpen(true)
+            },
+            {
+              icon: Key,
+              title: "Change Password",
+              description: "Update your account password",
+              content: "Ensure your account is secure by regularly updating your password.",
+              buttonLabel: "Change Password",
+              onClick: () => setIsPasswordDialogOpen(true)
+            },
+            // ---- New Registered Users card (placed below Change Password) ----
+            {
+              icon: Users,
+              title: "Registered Users",
+              description: "Browse all registered accounts",
+              content: "View and manage users per franchise.",
+              buttonLabel: "Open",
+              onClick: () => setIsUsersDialogOpen(true)
+            },
+            {
+              icon: Download,
+              title: "Download Manual",
+              description: "Get the complete system documentation",
+              content: "Download the latest version of the system manual for reference.",
+              buttonLabel: "Download PDF",
+              variant: "outline" as const,
+              iconComponent: <Download className="mr-2 h-4 w-4" style={{ color: themeColor }} />
+            }
+          ].map(({ icon: Icon, title, description, content, buttonLabel, onClick, variant = "default" as const, iconComponent }, i) => (
             <Card key={i} className="border-[rgb(0,100,55)] p-4 sm:p-6">
               <CardHeader className="flex flex-row items-center space-x-4">
                 <Icon className="w-8 h-8" style={{ color: themeColor }} />
@@ -365,22 +401,89 @@ export function CentralDashboard() {
             <DialogDescription>Fill in the details to create a new user account.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
-            {["name", "email", "franchiseId", "password"].map((field) => (
-              <div key={field} className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
-                <Label htmlFor={field} className="text-right capitalize sm:col-span-1">
-                  {field === 'franchiseId' ? 'Franchise ID' : field}
-                </Label>
-                <Input
-                  id={field}
-                  type={field === 'password' || field === 'email' ? field : 'text'}
-                  value={registerForm[field as keyof typeof registerForm]}
-                  onChange={(e) => setRegisterForm({ ...registerForm, [field]: e.target.value })}
-                  placeholder={field === 'franchiseId' ? 'e.g., 003, 4545, AB12, FR-xyz' : undefined}
-                  className="sm:col-span-3"
-                  style={{ borderColor: themeColorLight }}
-                />
-              </div>
-            ))}
+            {/* Name */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="name" className="text-right sm:col-span-1">Name</Label>
+              <Input
+                id="name"
+                type="text"
+                value={registerForm.name}
+                onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })}
+                placeholder="Manager full name"
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
+            </div>
+
+            {/* Email */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="email" className="text-right sm:col-span-1">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                value={registerForm.email}
+                onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
+                placeholder="main.user@example.com"
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
+            </div>
+
+            {/* Franchise ID */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="franchiseId" className="text-right sm:col-span-1">Franchise ID</Label>
+              <Input
+                id="franchiseId"
+                type="text"
+                value={registerForm.franchiseId}
+                onChange={(e) => setRegisterForm({ ...registerForm, franchiseId: e.target.value })}
+                placeholder="e.g., 003, 4545, AB12, FR-xyz"
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
+            </div>
+
+            {/* Phone */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="phone" className="text-right sm:col-span-1">Phone</Label>
+              <Input
+                id="phone"
+                type="tel"
+                value={registerForm.phone}
+                onChange={(e) => setRegisterForm({ ...registerForm, phone: e.target.value })}
+                placeholder="+91 98765 43210"
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
+            </div>
+
+            {/* Address */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="address" className="text-right sm:col-span-1">Address</Label>
+              <Input
+                id="address"
+                type="text"
+                value={registerForm.address}
+                onChange={(e) => setRegisterForm({ ...registerForm, address: e.target.value })}
+                placeholder="Building, Street, City, PIN"
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
+            </div>
+
+            {/* Password */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="password" className="text-right sm:col-span-1">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={registerForm.password}
+                onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
+                placeholder="Min 8 characters"
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
+            </div>
           </div>
           <div className="flex flex-col sm:flex-row justify-end gap-2">
             <Button
@@ -450,6 +553,30 @@ export function CentralDashboard() {
               className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
             >
               Save Password
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Registered Users Dialog (stub — functionality to be added) */}
+      <Dialog open={isUsersDialogOpen} onOpenChange={setIsUsersDialogOpen}>
+        <DialogContent className="w-full sm:max-w-lg" style={{ borderColor: themeColor }}>
+          <DialogHeader>
+            <DialogTitle style={{ color: themeColor }}>Registered Users</DialogTitle>
+            <DialogDescription>
+              We’ll wire this up to list/search users. Tell me the exact functionality you want and I’ll plug it in.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="text-sm text-muted-foreground">
+            Placeholder content goes here.
+          </div>
+          <div className="flex justify-end">
+            <Button
+              onClick={() => setIsUsersDialogOpen(false)}
+              style={{ backgroundColor: themeColor }}
+              className="hover:bg-[rgb(0,80,40)]"
+            >
+              Close
             </Button>
           </div>
         </DialogContent>
