@@ -10,6 +10,9 @@ import NotFound from "./pages/NotFound";
 // Supabase Client Setup
 import { supabase } from "./integrations/supabase/client"; // Correct relative path
 
+// NEW: Registered Users page
+import RegisteredUsers from "@/pages/RegisteredUsers";
+
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -21,7 +24,10 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
+
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            <Route path="/registered-users" element={<RegisteredUsers />} />
+
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

@@ -1,9 +1,13 @@
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { FRCentralDashboard } from './FRCentralDashboard';
 import { MenuManager } from '@/components/menu/MenuManager';
 import { BillHistory } from '@/components/billing/BillHistory';
 import logo from '@/assets/logo.png';
 import { WeeklyPerformanceChart } from '@/components/analytics/WeeklyPerformanceChart';
+
 import {
   Tabs, TabsContent, TabsList, TabsTrigger
 } from '@/components/ui/tabs';
@@ -13,7 +17,6 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Download, Key, UserPlus, Clock, Users } from 'lucide-react';
-import { useState } from 'react';
 import {
   Dialog, DialogContent, DialogHeader,
   DialogTitle, DialogDescription
@@ -23,6 +26,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 
+// ---------------- helpers ----------------
 function normalizeFranchiseIdFlexible(input: string) {
   let raw = String(input || '').trim();
   raw = raw.replace(/^\s*FR[-_\s]?/i, ''); // remove leading FR- (case-insensitive)
@@ -49,10 +53,18 @@ function isValidPhone(p: string) {
 const STORE_EMAIL_DOMAIN: string =
   (import.meta as any)?.env?.VITE_STORE_EMAIL_DOMAIN || 'yourdomain.com';
 
+// ---- Tabs routing helpers ----
+const ALL_TABS = ['overview', 'weekly', 'menu', 'bills', 'stock', 'settings'] as const;
+type TabKey = typeof ALL_TABS[number];
+function coerceTab(tabParam: string | null): TabKey {
+  const t = (tabParam || '').toLowerCase();
+  return (ALL_TABS as readonly string[]).includes(t) ? (t as TabKey) : 'overview';
+}
+
+// ---------------- component ----------------
 export function CentralDashboard() {
   const [isRegisterDialogOpen, setIsRegisterDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
-  const [isUsersDialogOpen, setIsUsersDialogOpen] = useState(false);
 
   // Success dialog state
   const [isSuccessDialogOpen, setIsSuccessDialogOpen] = useState(false);
@@ -69,6 +81,26 @@ export function CentralDashboard() {
   const [franchiseId, setFranchiseId] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const { toast } = useToast();
+  const navigate = useNavigate();
+
+  // ---- tab state <-> URL sync ----
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<TabKey>(coerceTab(searchParams.get('tab')));
+
+  // Keep tab state in sync if URL changes (e.g., browser back/forward)
+  useEffect(() => {
+    const urlTab = coerceTab(searchParams.get('tab'));
+    if (urlTab !== activeTab) setActiveTab(urlTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const handleTabChange = (val: string) => {
+    const next = coerceTab(val);
+    setActiveTab(next);
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', next);
+    setSearchParams(params, { replace: false });
+  };
 
   // -------------------
   // REGISTER NEW USER (stay on same page, show popup)
@@ -284,8 +316,8 @@ export function CentralDashboard() {
 
   return (
     <DashboardLayout title={titleWithLogo}>
-      <Tabs defaultValue="overview" className="w-full px-2 sm:px-4 py-4">
-        {/* Improved tabs layout with better alignment */}
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full px-2 sm:px-4 py-4">
+        {/* Tabs */}
         <TabsList
           className="grid grid-cols-2 sm:grid-cols-6 w-full gap-1.5 items-stretch h-auto min-h[40px] sm:min-h-[44px]"
           style={{ backgroundColor: themeColorLight }}
@@ -332,6 +364,7 @@ export function CentralDashboard() {
           </Card>
         </TabsContent>
 
+        {/* SETTINGS – includes PROFILES section (Registered Users) */}
         <TabsContent value="settings" className="mt-4 space-y-4">
           {[
             {
@@ -350,14 +383,14 @@ export function CentralDashboard() {
               buttonLabel: "Change Password",
               onClick: () => setIsPasswordDialogOpen(true)
             },
-            // ---- New Registered Users card (placed below Change Password) ----
+            // ---- Profiles section (Registered Users) ----
             {
               icon: Users,
-              title: "Registered Users",
-              description: "Browse all registered accounts",
-              content: "View and manage users per franchise.",
-              buttonLabel: "Open",
-              onClick: () => setIsUsersDialogOpen(true)
+              title: "Profiles",
+              description: "Browse and edit all franchise profiles",
+              content: "Open a full page with search, inline edit, delete, and CSV export.",
+              buttonLabel: "Open Profiles",
+              onClick: () => navigate('/registered-users')
             },
             {
               icon: Download,
@@ -366,9 +399,9 @@ export function CentralDashboard() {
               content: "Download the latest version of the system manual for reference.",
               buttonLabel: "Download PDF",
               variant: "outline" as const,
-              iconComponent: <Download className="mr-2 h-4 w-4" style={{ color: themeColor }} />
+              onClick: () => { /* wire your manual download here */ },
             }
-          ].map(({ icon: Icon, title, description, content, buttonLabel, onClick, variant = "default" as const, iconComponent }, i) => (
+          ].map(({ icon: Icon, title, description, content, buttonLabel, onClick, variant = "default" as const }, i) => (
             <Card key={i} className="border-[rgb(0,100,55)] p-4 sm:p-6">
               <CardHeader className="flex flex-row items-center space-x-4">
                 <Icon className="w-8 h-8" style={{ color: themeColor }} />
@@ -385,7 +418,7 @@ export function CentralDashboard() {
                   className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
                   onClick={onClick}
                 >
-                  {iconComponent || null}{buttonLabel}
+                  {buttonLabel}
                 </Button>
               </CardFooter>
             </Card>
@@ -553,30 +586,6 @@ export function CentralDashboard() {
               className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
             >
               Save Password
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Registered Users Dialog (stub — functionality to be added) */}
-      <Dialog open={isUsersDialogOpen} onOpenChange={setIsUsersDialogOpen}>
-        <DialogContent className="w-full sm:max-w-lg" style={{ borderColor: themeColor }}>
-          <DialogHeader>
-            <DialogTitle style={{ color: themeColor }}>Registered Users</DialogTitle>
-            <DialogDescription>
-              We’ll wire this up to list/search users. Tell me the exact functionality you want and I’ll plug it in.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="text-sm text-muted-foreground">
-            Placeholder content goes here.
-          </div>
-          <div className="flex justify-end">
-            <Button
-              onClick={() => setIsUsersDialogOpen(false)}
-              style={{ backgroundColor: themeColor }}
-              className="hover:bg-[rgb(0,80,40)]"
-            >
-              Close
             </Button>
           </div>
         </DialogContent>
