@@ -57,13 +57,15 @@ export default function RegisteredUsers() {
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const refetchTimer = useRef<number | null>(null);
 
-  // Debounce search input -> search
+  // Debounce search input -> search term
   useEffect(() => {
     const t = window.setTimeout(() => setSearch(searchInput.trim()), 220);
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  // Fetch a page of profiles (only needed columns)
+  const selectColumns = 'id,name,email,franchise_id,phone,address';
+
+  // Fetch a page of profiles
   const fetchPage = async (pageNum: number) => {
     setLoading(true);
     const from = (pageNum - 1) * PAGE_SIZE;
@@ -71,7 +73,7 @@ export default function RegisteredUsers() {
 
     const { data, error, count } = await supabase
       .from('profiles')
-      .select('id,name,email,franchise_id,phone,address', { count: 'estimated' })
+      .select(selectColumns, { count: 'estimated' })
       .order('franchise_id', { ascending: true })
       .range(from, to);
 
@@ -81,11 +83,22 @@ export default function RegisteredUsers() {
       return;
     }
 
-    setProfiles(data ?? []);
-    // Merge originals incrementally (only for the current page)
+    // Normalize to Profile[]
+    const normalized: Profile[] = (data ?? []).map((p: any) => ({
+      id: p.id,
+      name: p.name ?? null,
+      email: p.email ?? null,
+      franchise_id: p.franchise_id ?? null,
+      phone: p.phone ?? null,
+      address: p.address ?? null,
+    }));
+
+    setProfiles(normalized);
+
     const map: Record<string, Profile> = {};
-    (data ?? []).forEach(p => { map[p.id] = p; });
+    normalized.forEach(p => { map[p.id] = p; });
     setOriginal(prev => ({ ...prev, ...map }));
+
     setTotalCount(typeof count === 'number' ? count : null);
     setLoading(false);
   };
@@ -96,15 +109,12 @@ export default function RegisteredUsers() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
-  // Realtime: on any insert/update/delete, throttle-refetch the current page
+  // Realtime: throttle-refetch current page on any change
   useEffect(() => {
     const channel = supabase
       .channel('profiles-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-        // Throttle to avoid multiple refetches in a burst
-        if (refetchTimer.current) {
-          window.clearTimeout(refetchTimer.current);
-        }
+        if (refetchTimer.current) clearTimeout(refetchTimer.current);
         refetchTimer.current = window.setTimeout(() => {
           fetchPage(page);
           refetchTimer.current = null;
@@ -124,7 +134,7 @@ export default function RegisteredUsers() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
-  // Client-side filter (only current page for speed)
+  // Client-side filter (current page only)
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     if (!q) return profiles;
@@ -156,12 +166,11 @@ export default function RegisteredUsers() {
     });
   }
 
-  // Save a single row with optimistic merge of all edited fields
+  // Save a single row with optimistic merge
   async function saveRow(id: string) {
     const row = profiles.find(p => p.id === id);
     if (!row) return;
 
-    // Validate & normalize
     const updates: Partial<Profile> = {};
     if (!row.franchise_id) {
       toast({ title: 'Validation', description: 'Franchise ID is required', variant: 'destructive' });
@@ -179,7 +188,6 @@ export default function RegisteredUsers() {
       return;
     }
 
-    // Trim strings
     updates.name = row.name ? row.name.trim() : null;
     updates.email = row.email ? row.email.trim() : null;
     updates.phone = row.phone ? row.phone.trim() : null;
@@ -187,10 +195,9 @@ export default function RegisteredUsers() {
 
     setSavingIds(prev => new Set([...prev, id]));
 
-    // Update without select (avoid 406 under RLS)
     const { error: updateError } = await supabase
       .from('profiles')
-      .update(updates)
+      .update(updates as any)
       .eq('id', id);
 
     setSavingIds(prev => {
@@ -208,7 +215,6 @@ export default function RegisteredUsers() {
       return;
     }
 
-    // Optimistic merge so UI shows your changes
     const mergedRow: Profile = { ...(row as Profile), ...(updates as Profile) };
     setProfiles(prev => prev.map(p => (p.id === id ? mergedRow : p)));
     setOriginal(prev => ({ ...prev, [id]: mergedRow }));
@@ -217,17 +223,25 @@ export default function RegisteredUsers() {
       return rest;
     });
 
-    // Optional lightweight revalidation (skip if RLS blocks SELECT)
+    // Optional revalidation (if SELECT allowed)
     const { data: refreshed, error: selectError } = await supabase
       .from('profiles')
-      .select('id,name,email,franchise_id,phone,address')
+      .select(selectColumns)
       .eq('id', id)
-      .maybeSingle<Profile>();
+      .maybeSingle<any>();
 
     if (!selectError && refreshed) {
-      setProfiles(prev => prev.map(p => (p.id === id ? refreshed : p)));
-      setOriginal(prev => ({ ...prev, [id]: refreshed }));
-      toast({ title: 'Saved', description: `Profile ${refreshed.franchise_id} updated` });
+      const normalized: Profile = {
+        id: refreshed.id,
+        name: refreshed.name ?? null,
+        email: refreshed.email ?? null,
+        franchise_id: refreshed.franchise_id ?? null,
+        phone: refreshed.phone ?? null,
+        address: refreshed.address ?? null,
+      };
+      setProfiles(prev => prev.map(p => (p.id === id ? normalized : p)));
+      setOriginal(prev => ({ ...prev, [id]: normalized }));
+      toast({ title: 'Saved', description: `Profile ${normalized.franchise_id} updated` });
       return;
     }
     if (selectError && /row-level security|RLS|permission/i.test(selectError.message)) {
@@ -269,7 +283,6 @@ export default function RegisteredUsers() {
       return;
     }
 
-    // Remove optimistically (realtime will also refetch page shortly)
     setProfiles(prev => prev.filter(p => p.id !== id));
     setEdited(prev => {
       const { [id]: _, ...rest } = prev;
@@ -323,7 +336,7 @@ export default function RegisteredUsers() {
   }, [totalCount]);
 
   return (
-    <DashboardLayout title={<span className="font-bold">Registered Users</span>}>
+    <DashboardLayout title="Registered Users">
       {/* Back button OUTSIDE the card, top-left */}
       <div className="flex justify-start mb-2">
         <Button
@@ -404,7 +417,6 @@ export default function RegisteredUsers() {
                   <th className="py-2 pr-3">Email</th>
                   <th className="py-2 pr-3">Phone</th>
                   <th className="py-2 pr-3">Address</th>
-                  {/* Wider actions column to avoid wrapping */}
                   <th className="py-2 pr-3 w-[360px]">Actions</th>
                 </tr>
               </thead>
@@ -418,7 +430,6 @@ export default function RegisteredUsers() {
                   const deleting = deletingIds.has(row.id);
                   return (
                     <tr key={row.id} className="border-b last:border-0">
-                      {/* Franchise ID */}
                       <td className="py-2 pr-3 min-w-[160px]">
                         <Input
                           value={row.franchise_id || ''}
@@ -426,7 +437,6 @@ export default function RegisteredUsers() {
                           className="h-9"
                         />
                       </td>
-                      {/* Name */}
                       <td className="py-2 pr-3 min-w-[160px]">
                         <Input
                           value={row.name || ''}
@@ -434,7 +444,6 @@ export default function RegisteredUsers() {
                           className="h-9"
                         />
                       </td>
-                      {/* Email */}
                       <td className="py-2 pr-3 min-w-[200px]">
                         <Input
                           type="email"
@@ -443,7 +452,6 @@ export default function RegisteredUsers() {
                           className="h-9"
                         />
                       </td>
-                      {/* Phone */}
                       <td className="py-2 pr-3 min-w-[160px]">
                         <Input
                           value={row.phone || ''}
@@ -452,7 +460,6 @@ export default function RegisteredUsers() {
                           placeholder="+91 98765 43210"
                         />
                       </td>
-                      {/* Address */}
                       <td className="py-2 pr-3 min-w-[220px]">
                         <Input
                           value={row.address || ''}
@@ -463,7 +470,6 @@ export default function RegisteredUsers() {
                       </td>
 
                       <td className="py-2 pr-3">
-                        {/* Single line of actions */}
                         <div className="flex items-center gap-2 whitespace-nowrap flex-nowrap">
                           <Button
                             size="sm"
@@ -523,7 +529,7 @@ export default function RegisteredUsers() {
         <CardFooter className="flex flex-col gap-1 text-xs text-muted-foreground">
           <span>Tip: Franchise IDs auto-normalize to <code>FR-XXX</code> on save. Unique constraint is enforced.</span>
           <span>Deleting here removes the row from <code>public.profiles</code> only. The corresponding <code>auth.users</code> account is not deleted.</span>
-          <span>Performance tip: Add DB index if not present — <code>create index if not exists idx_profiles_franchise_id on public.profiles(franchise_id);</code></span>
+          <span>Perf tip: your UNIQUE on <code>franchise_id</code> already creates an index; ordering by it is efficient.</span>
         </CardFooter>
       </Card>
     </DashboardLayout>
