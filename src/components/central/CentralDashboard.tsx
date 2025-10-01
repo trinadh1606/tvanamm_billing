@@ -61,6 +61,9 @@ function coerceTab(tabParam: string | null): TabKey {
   return (ALL_TABS as readonly string[]).includes(t) ? (t as TabKey) : 'overview';
 }
 
+// LocalStorage key to suppress auth listeners during multi-signup flow
+const SUPPRESS_AUTH_KEY = 'FR_SUPPRESS_AUTH_HANDLERS';
+
 // ---------------- component ----------------
 export function CentralDashboard() {
   const [isRegisterDialogOpen, setIsRegisterDialogOpen] = useState(false);
@@ -86,6 +89,9 @@ export function CentralDashboard() {
   // NEW: eye toggle for passwords
   const [showRegisterPwd, setShowRegisterPwd] = useState(false);
   const [showChangePwd, setShowChangePwd] = useState(false); // also add to Change Password dialog for convenience
+
+  // NEW: registering state to freeze UI & avoid visual jumps
+  const [registering, setRegistering] = useState(false);
 
   // ---- tab state <-> URL sync ----
   const [searchParams, setSearchParams] = useSearchParams();
@@ -140,6 +146,10 @@ export function CentralDashboard() {
     const { formatted, alias } = norm;
 
     try {
+      setRegistering(true);
+      // Tell auth listeners to ignore the transient session swaps
+      localStorage.setItem(SUPPRESS_AUTH_KEY, '1');
+
       // 1) Snapshot the current (central admin) session
       const { data: { session: centralSession } } = await supabase.auth.getSession();
       if (!centralSession?.access_token || !centralSession?.refresh_token) {
@@ -222,6 +232,10 @@ export function CentralDashboard() {
     } catch (error) {
       console.error("Registration error:", error);
       toast({ title: "Error", description: "Failed to register user", variant: "destructive" });
+    } finally {
+      // Clear suppression and busy state
+      localStorage.removeItem(SUPPRESS_AUTH_KEY);
+      setRegistering(false);
     }
   };
 
@@ -431,7 +445,9 @@ export function CentralDashboard() {
       </Tabs>
 
       {/* Register Dialog */}
-      <Dialog open={isRegisterDialogOpen} onOpenChange={setIsRegisterDialogOpen}>
+      <Dialog open={isRegisterDialogOpen} onOpenChange={(open) => {
+        if (!registering) setIsRegisterDialogOpen(open);
+      }}>
         <DialogContent className="w-full sm:max-w-md" style={{ borderColor: themeColor }}>
           <DialogHeader>
             <DialogTitle style={{ color: themeColor }}>Register New User</DialogTitle>
@@ -449,6 +465,7 @@ export function CentralDashboard() {
                 placeholder="Manager full name"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
 
@@ -463,6 +480,7 @@ export function CentralDashboard() {
                 placeholder="main.user@example.com"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
 
@@ -477,6 +495,7 @@ export function CentralDashboard() {
                 placeholder="e.g., 003, 4545, AB12, FR-xyz"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
 
@@ -491,6 +510,7 @@ export function CentralDashboard() {
                 placeholder="+91 98765 43210"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
 
@@ -505,12 +525,14 @@ export function CentralDashboard() {
                   onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
                   placeholder="Min 8 characters"
                   style={{ borderColor: themeColorLight, paddingRight: '2.5rem' }}
+                  disabled={registering}
                 />
                 <button
                   type="button"
                   onClick={() => setShowRegisterPwd(v => !v)}
                   className="absolute inset-y-0 right-2 flex items-center"
                   aria-label={showRegisterPwd ? 'Hide password' : 'Show password'}
+                  disabled={registering}
                 >
                   {showRegisterPwd ? <EyeOff className="w-5 h-5 opacity-70" /> : <Eye className="w-5 h-5 opacity-70" />}
                 </button>
@@ -528,6 +550,7 @@ export function CentralDashboard() {
                 placeholder="Building, Street, City, PIN"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
           </div>
@@ -537,6 +560,7 @@ export function CentralDashboard() {
               onClick={() => setIsRegisterDialogOpen(false)}
               style={{ borderColor: themeColor, color: themeColor }}
               className="hover:bg-[rgba(0,100,55,0.1)] w-full sm:w-auto"
+              disabled={registering}
             >
               Cancel
             </Button>
@@ -544,8 +568,9 @@ export function CentralDashboard() {
               onClick={handleRegister}
               style={{ backgroundColor: themeColor }}
               className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
+              disabled={registering}
             >
-              Register
+              {registering ? 'Registering…' : 'Register'}
             </Button>
           </div>
         </DialogContent>
