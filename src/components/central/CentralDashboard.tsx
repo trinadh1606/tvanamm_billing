@@ -16,7 +16,7 @@ import {
   CardContent, CardFooter
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Download, Key, UserPlus, Clock, Users, Eye, EyeOff } from 'lucide-react';
+import { Download, Key, UserPlus, Clock, Users } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader,
   DialogTitle, DialogDescription
@@ -82,10 +82,6 @@ export function CentralDashboard() {
   const [newPassword, setNewPassword] = useState('');
   const { toast } = useToast();
   const navigate = useNavigate();
-
-  // NEW: eye toggle for passwords
-  const [showRegisterPwd, setShowRegisterPwd] = useState(false);
-  const [showChangePwd, setShowChangePwd] = useState(false); // also add to Change Password dialog for convenience
 
   // ---- tab state <-> URL sync ----
   const [searchParams, setSearchParams] = useSearchParams();
@@ -494,29 +490,6 @@ export function CentralDashboard() {
               />
             </div>
 
-            {/* Password (with eye toggle) */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
-              <Label htmlFor="password" className="text-right sm:col-span-1">Password</Label>
-              <div className="relative sm:col-span-3">
-                <Input
-                  id="password"
-                  type={showRegisterPwd ? 'text' : 'password'}
-                  value={registerForm.password}
-                  onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
-                  placeholder="Min 8 characters"
-                  style={{ borderColor: themeColorLight, paddingRight: '2.5rem' }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowRegisterPwd(v => !v)}
-                  className="absolute inset-y-0 right-2 flex items-center"
-                  aria-label={showRegisterPwd ? 'Hide password' : 'Show password'}
-                >
-                  {showRegisterPwd ? <EyeOff className="w-5 h-5 opacity-70" /> : <Eye className="w-5 h-5 opacity-70" />}
-                </button>
-              </div>
-            </div>
-
             {/* Address */}
             <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
               <Label htmlFor="address" className="text-right sm:col-span-1">Address</Label>
@@ -526,6 +499,20 @@ export function CentralDashboard() {
                 value={registerForm.address}
                 onChange={(e) => setRegisterForm({ ...registerForm, address: e.target.value })}
                 placeholder="Building, Street, City, PIN"
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
+            </div>
+
+            {/* Password */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="password" className="text-right sm:col-span-1">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={registerForm.password}
+                onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
+                placeholder="Min 8 characters"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
               />
@@ -551,7 +538,7 @@ export function CentralDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* Change Password Dialog (also with eye toggle) */}
+      {/* Change Password Dialog */}
       <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
         <DialogContent className="w-full sm:max-w-md" style={{ borderColor: themeColor }}>
           <DialogHeader>
@@ -573,24 +560,15 @@ export function CentralDashboard() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
               <Label htmlFor="newPassword" className="text-right sm:col-span-1">New Password</Label>
-              <div className="relative sm:col-span-3">
-                <Input
-                  id="newPassword"
-                  type={showChangePwd ? 'text' : 'password'}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
-                  style={{ borderColor: themeColorLight, paddingRight: '2.5rem' }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowChangePwd(v => !v)}
-                  className="absolute inset-y-0 right-2 flex items-center"
-                  aria-label={showChangePwd ? 'Hide password' : 'Show password'}
-                >
-                  {showChangePwd ? <EyeOff className="w-5 h-5 opacity-70" /> : <Eye className="w-5 h-5 opacity-70" />}
-                </button>
-              </div>
+              <Input
+                id="newPassword"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Enter new password"
+                className="sm:col-span-3"
+                style={{ borderColor: themeColorLight }}
+              />
             </div>
           </div>
           <div className="flex flex-col sm:flex-row justify-end gap-2">
