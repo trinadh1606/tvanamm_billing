@@ -34,6 +34,8 @@ function isValidPhone(p: string) {
   return digits.length >= 7 && digits.length <= 15;
 }
 
+const PAGE_SIZE = 100;
+
 export default function RegisteredUsers() {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -42,77 +44,101 @@ export default function RegisteredUsers() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [original, setOriginal] = useState<Record<string, Profile>>({});
   const [edited, setEdited] = useState<Record<string, Partial<Profile>>>({});
+
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const refetchTimer = useRef<number | null>(null);
 
-  // Fetch profiles
+  // Debounce search input -> search
   useEffect(() => {
-    let mounted = true;
-    (async () => {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('franchise_id', { ascending: true })
-        .returns<Profile[]>();
+    const t = window.setTimeout(() => setSearch(searchInput.trim()), 220);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
-      if (error) {
-        toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      } else if (mounted) {
-        setProfiles(data ?? []);
-        const map: Record<string, Profile> = {};
-        (data ?? []).forEach(p => { map[p.id] = { ...p }; });
-        setOriginal(map);
-      }
+  // Fetch a page of profiles (only needed columns)
+  const fetchPage = async (pageNum: number) => {
+    setLoading(true);
+    const from = (pageNum - 1) * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+
+    const { data, error, count } = await supabase
+      .from('profiles')
+      .select('id,name,email,franchise_id,phone,address', { count: 'estimated' })
+      .order('franchise_id', { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
       setLoading(false);
-    })();
-    return () => { mounted = false; };
-  }, [toast]);
+      return;
+    }
 
-  // Live changes (insert/update/delete)
+    setProfiles(data ?? []);
+    // Merge originals incrementally (only for the current page)
+    const map: Record<string, Profile> = {};
+    (data ?? []).forEach(p => { map[p.id] = p; });
+    setOriginal(prev => ({ ...prev, ...map }));
+    setTotalCount(typeof count === 'number' ? count : null);
+    setLoading(false);
+  };
+
+  // Initial + when page changes
+  useEffect(() => {
+    fetchPage(page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  // Realtime: on any insert/update/delete, throttle-refetch the current page
   useEffect(() => {
     const channel = supabase
       .channel('profiles-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
-        setProfiles(prev => {
-          const copy = [...prev];
-          if (payload.eventType === 'INSERT') {
-            const row = payload.new as Profile;
-            if (!copy.find(r => r.id === row.id)) copy.push(row);
-          } else if (payload.eventType === 'UPDATE') {
-            const row = payload.new as Profile;
-            const ix = copy.findIndex(r => r.id === row.id);
-            if (ix !== -1) copy[ix] = row;
-          } else if (payload.eventType === 'DELETE') {
-            const row = payload.old as Profile;
-            return copy.filter(r => r.id !== row.id);
-          }
-          copy.sort((a, b) => (a.franchise_id || '').localeCompare(b.franchise_id || ''));
-          return copy;
-        });
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+        // Throttle to avoid multiple refetches in a burst
+        if (refetchTimer.current) {
+          window.clearTimeout(refetchTimer.current);
+        }
+        refetchTimer.current = window.setTimeout(() => {
+          fetchPage(page);
+          refetchTimer.current = null;
+        }, 250);
       });
+
     channel.subscribe();
     channelRef.current = channel;
-    return () => { channel.unsubscribe(); };
-  }, []);
 
+    return () => {
+      channel.unsubscribe();
+      if (refetchTimer.current) {
+        clearTimeout(refetchTimer.current);
+        refetchTimer.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  // Client-side filter (only current page for speed)
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = search.toLowerCase();
     if (!q) return profiles;
     return profiles.filter(p => {
-      const s = [
-        p.name, p.email, p.franchise_id, p.phone, p.address, p.id
-      ].map(v => (v || '').toString().toLowerCase()).join(' ');
+      const s = [p.name, p.email, p.franchise_id, p.phone, p.address, p.id]
+        .map(v => (v || '').toString().toLowerCase())
+        .join(' ');
       return s.includes(q);
     });
   }, [profiles, search]);
 
   function setField(id: string, field: keyof Profile, value: string) {
     setEdited(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
-    setProfiles(prev => prev.map(p => p.id === id ? { ...p, [field]: value } as Profile : p));
+    setProfiles(prev => prev.map(p => (p.id === id ? { ...p, [field]: value } as Profile : p)));
   }
 
   function hasChanges(id: string) {
@@ -123,7 +149,7 @@ export default function RegisteredUsers() {
   function revertRow(id: string) {
     const baseline = original[id];
     if (!baseline) return;
-    setProfiles(prev => prev.map(p => p.id === id ? { ...baseline } : p));
+    setProfiles(prev => prev.map(p => (p.id === id ? { ...baseline } : p)));
     setEdited(prev => {
       const { [id]: _, ...rest } = prev;
       return rest;
@@ -161,7 +187,7 @@ export default function RegisteredUsers() {
 
     setSavingIds(prev => new Set([...prev, id]));
 
-    // Perform update WITHOUT select to avoid 406 under RLS
+    // Update without select (avoid 406 under RLS)
     const { error: updateError } = await supabase
       .from('profiles')
       .update(updates)
@@ -182,30 +208,28 @@ export default function RegisteredUsers() {
       return;
     }
 
-    // Optimistically merge ALL updates into the current row so UI shows your changes
+    // Optimistic merge so UI shows your changes
     const mergedRow: Profile = { ...(row as Profile), ...(updates as Profile) };
-    setProfiles(prev => prev.map(p => p.id === id ? mergedRow : p));
+    setProfiles(prev => prev.map(p => (p.id === id ? mergedRow : p)));
     setOriginal(prev => ({ ...prev, [id]: mergedRow }));
     setEdited(prev => {
       const { [id]: _, ...rest } = prev;
       return rest;
     });
 
-    // Try to refetch authoritative row (only if SELECT allowed)
+    // Optional lightweight revalidation (skip if RLS blocks SELECT)
     const { data: refreshed, error: selectError } = await supabase
       .from('profiles')
-      .select('*')
+      .select('id,name,email,franchise_id,phone,address')
       .eq('id', id)
       .maybeSingle<Profile>();
 
     if (!selectError && refreshed) {
-      setProfiles(prev => prev.map(p => p.id === id ? refreshed : p));
+      setProfiles(prev => prev.map(p => (p.id === id ? refreshed : p)));
       setOriginal(prev => ({ ...prev, [id]: refreshed }));
       toast({ title: 'Saved', description: `Profile ${refreshed.franchise_id} updated` });
       return;
     }
-
-    // If SELECT blocked, keep optimistic state and inform user
     if (selectError && /row-level security|RLS|permission/i.test(selectError.message)) {
       toast({
         title: 'Saved (limited visibility)',
@@ -213,14 +237,10 @@ export default function RegisteredUsers() {
       });
       return;
     }
-
-    // Unexpected select error: keep optimistic but notify
     if (selectError) {
       toast({ title: 'Saved (unconfirmed read)', description: selectError.message, variant: 'destructive' });
       return;
     }
-
-    // No error but no data — still keep optimistic state
     toast({ title: 'Saved', description: `Profile ${mergedRow.franchise_id} updated` });
   }
 
@@ -248,7 +268,8 @@ export default function RegisteredUsers() {
       toast({ title: 'Delete failed', description: msg, variant: 'destructive' });
       return;
     }
-    // Remove optimistically (realtime will also update)
+
+    // Remove optimistically (realtime will also refetch page shortly)
     setProfiles(prev => prev.filter(p => p.id !== id));
     setEdited(prev => {
       const { [id]: _, ...rest } = prev;
@@ -288,13 +309,18 @@ export default function RegisteredUsers() {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'profiles.csv'; a.click();
+    a.href = url; a.download = `profiles_page${page}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
   function clearSearch() {
-    setSearch('');
+    setSearchInput('');
   }
+
+  const totalPages = useMemo(() => {
+    if (!totalCount) return 1;
+    return Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  }, [totalCount]);
 
   return (
     <DashboardLayout title={<span className="font-bold">Registered Users</span>}>
@@ -332,11 +358,11 @@ export default function RegisteredUsers() {
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 opacity-60" />
             <Input
               className="pl-8"
-              placeholder="Search: franchise id, name, email, phone, address…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search (current page): franchise id, name, email, phone, address…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
-            {search && (
+            {searchInput && (
               <button
                 type="button"
                 onClick={clearSearch}
@@ -350,6 +376,21 @@ export default function RegisteredUsers() {
         </CardHeader>
 
         <CardContent className="overflow-auto">
+          {/* Pagination controls (top) */}
+          <div className="flex items-center justify-between mb-2 text-sm">
+            <div className="opacity-70">
+              Page {page} {totalPages ? `of ${totalPages}` : ''}{totalCount !== null ? ` · ${totalCount} total` : ''}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>
+                Prev
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setPage(p => (totalPages ? Math.min(totalPages, p + 1) : p + 1))} disabled={totalPages ? page >= totalPages : false}>
+                Next
+              </Button>
+            </div>
+          </div>
+
           {loading ? (
             <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading profiles…
@@ -462,11 +503,27 @@ export default function RegisteredUsers() {
               </tbody>
             </table>
           )}
+
+          {/* Pagination controls (bottom) */}
+          <div className="flex items-center justify-between mt-3 text-sm">
+            <div className="opacity-70">
+              Page {page} {totalPages ? `of ${totalPages}` : ''}{totalCount !== null ? ` · ${totalCount} total` : ''}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>
+                Prev
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setPage(p => (totalPages ? Math.min(totalPages, p + 1) : p + 1))} disabled={totalPages ? page >= totalPages : false}>
+                Next
+              </Button>
+            </div>
+          </div>
         </CardContent>
 
         <CardFooter className="flex flex-col gap-1 text-xs text-muted-foreground">
           <span>Tip: Franchise IDs auto-normalize to <code>FR-XXX</code> on save. Unique constraint is enforced.</span>
           <span>Deleting here removes the row from <code>public.profiles</code> only. The corresponding <code>auth.users</code> account is not deleted.</span>
+          <span>Performance tip: Add DB index if not present — <code>create index if not exists idx_profiles_franchise_id on public.profiles(franchise_id);</code></span>
         </CardFooter>
       </Card>
     </DashboardLayout>
