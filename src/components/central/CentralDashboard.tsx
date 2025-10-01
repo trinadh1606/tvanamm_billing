@@ -1,9 +1,13 @@
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { FRCentralDashboard } from './FRCentralDashboard';
 import { MenuManager } from '@/components/menu/MenuManager';
 import { BillHistory } from '@/components/billing/BillHistory';
 import logo from '@/assets/logo.png';
 import { WeeklyPerformanceChart } from '@/components/analytics/WeeklyPerformanceChart';
+
 import {
   Tabs, TabsContent, TabsList, TabsTrigger
 } from '@/components/ui/tabs';
@@ -12,8 +16,7 @@ import {
   CardContent, CardFooter
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Download, Key, UserPlus, Clock, Users } from 'lucide-react';
-import { useState } from 'react';
+import { Download, Key, UserPlus, Clock, Users, Eye, EyeOff } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogHeader,
   DialogTitle, DialogDescription
@@ -23,6 +26,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 
+// ---------------- helpers ----------------
 function normalizeFranchiseIdFlexible(input: string) {
   let raw = String(input || '').trim();
   raw = raw.replace(/^\s*FR[-_\s]?/i, ''); // remove leading FR- (case-insensitive)
@@ -49,10 +53,21 @@ function isValidPhone(p: string) {
 const STORE_EMAIL_DOMAIN: string =
   (import.meta as any)?.env?.VITE_STORE_EMAIL_DOMAIN || 'yourdomain.com';
 
+// ---- Tabs routing helpers ----
+const ALL_TABS = ['overview', 'weekly', 'menu', 'bills', 'stock', 'settings'] as const;
+type TabKey = typeof ALL_TABS[number];
+function coerceTab(tabParam: string | null): TabKey {
+  const t = (tabParam || '').toLowerCase();
+  return (ALL_TABS as readonly string[]).includes(t) ? (t as TabKey) : 'overview';
+}
+
+// LocalStorage key to suppress auth listeners during multi-signup flow
+const SUPPRESS_AUTH_KEY = 'FR_SUPPRESS_AUTH_HANDLERS';
+
+// ---------------- component ----------------
 export function CentralDashboard() {
   const [isRegisterDialogOpen, setIsRegisterDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
-  const [isUsersDialogOpen, setIsUsersDialogOpen] = useState(false);
 
   // Success dialog state
   const [isSuccessDialogOpen, setIsSuccessDialogOpen] = useState(false);
@@ -69,6 +84,33 @@ export function CentralDashboard() {
   const [franchiseId, setFranchiseId] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const { toast } = useToast();
+  const navigate = useNavigate();
+
+  // NEW: eye toggle for passwords
+  const [showRegisterPwd, setShowRegisterPwd] = useState(false);
+  const [showChangePwd, setShowChangePwd] = useState(false); // also add to Change Password dialog for convenience
+
+  // NEW: registering state to freeze UI & avoid visual jumps
+  const [registering, setRegistering] = useState(false);
+
+  // ---- tab state <-> URL sync ----
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<TabKey>(coerceTab(searchParams.get('tab')));
+
+  // Keep tab state in sync if URL changes (e.g., browser back/forward)
+  useEffect(() => {
+    const urlTab = coerceTab(searchParams.get('tab'));
+    if (urlTab !== activeTab) setActiveTab(urlTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const handleTabChange = (val: string) => {
+    const next = coerceTab(val);
+    setActiveTab(next);
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', next);
+    setSearchParams(params, { replace: false });
+  };
 
   // -------------------
   // REGISTER NEW USER (stay on same page, show popup)
@@ -104,6 +146,10 @@ export function CentralDashboard() {
     const { formatted, alias } = norm;
 
     try {
+      setRegistering(true);
+      // Tell auth listeners to ignore the transient session swaps
+      localStorage.setItem(SUPPRESS_AUTH_KEY, '1');
+
       // 1) Snapshot the current (central admin) session
       const { data: { session: centralSession } } = await supabase.auth.getSession();
       if (!centralSession?.access_token || !centralSession?.refresh_token) {
@@ -186,6 +232,10 @@ export function CentralDashboard() {
     } catch (error) {
       console.error("Registration error:", error);
       toast({ title: "Error", description: "Failed to register user", variant: "destructive" });
+    } finally {
+      // Clear suppression and busy state
+      localStorage.removeItem(SUPPRESS_AUTH_KEY);
+      setRegistering(false);
     }
   };
 
@@ -284,8 +334,8 @@ export function CentralDashboard() {
 
   return (
     <DashboardLayout title={titleWithLogo}>
-      <Tabs defaultValue="overview" className="w-full px-2 sm:px-4 py-4">
-        {/* Improved tabs layout with better alignment */}
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full px-2 sm:px-4 py-4">
+        {/* Tabs */}
         <TabsList
           className="grid grid-cols-2 sm:grid-cols-6 w-full gap-1.5 items-stretch h-auto min-h[40px] sm:min-h-[44px]"
           style={{ backgroundColor: themeColorLight }}
@@ -332,6 +382,7 @@ export function CentralDashboard() {
           </Card>
         </TabsContent>
 
+        {/* SETTINGS – includes PROFILES section (Registered Users) */}
         <TabsContent value="settings" className="mt-4 space-y-4">
           {[
             {
@@ -350,14 +401,14 @@ export function CentralDashboard() {
               buttonLabel: "Change Password",
               onClick: () => setIsPasswordDialogOpen(true)
             },
-            // ---- New Registered Users card (placed below Change Password) ----
+            // ---- Profiles section (Registered Users) ----
             {
               icon: Users,
-              title: "Registered Users",
-              description: "Browse all registered accounts",
-              content: "View and manage users per franchise.",
-              buttonLabel: "Open",
-              onClick: () => setIsUsersDialogOpen(true)
+              title: "Profiles",
+              description: "Browse and edit all franchise profiles",
+              content: "Open a full page with search, inline edit, delete, and CSV export.",
+              buttonLabel: "Open Profiles",
+              onClick: () => navigate('/registered-users')
             },
             {
               icon: Download,
@@ -366,9 +417,9 @@ export function CentralDashboard() {
               content: "Download the latest version of the system manual for reference.",
               buttonLabel: "Download PDF",
               variant: "outline" as const,
-              iconComponent: <Download className="mr-2 h-4 w-4" style={{ color: themeColor }} />
+              onClick: () => { /* wire your manual download here */ },
             }
-          ].map(({ icon: Icon, title, description, content, buttonLabel, onClick, variant = "default" as const, iconComponent }, i) => (
+          ].map(({ icon: Icon, title, description, content, buttonLabel, onClick, variant = "default" as const }, i) => (
             <Card key={i} className="border-[rgb(0,100,55)] p-4 sm:p-6">
               <CardHeader className="flex flex-row items-center space-x-4">
                 <Icon className="w-8 h-8" style={{ color: themeColor }} />
@@ -385,7 +436,7 @@ export function CentralDashboard() {
                   className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
                   onClick={onClick}
                 >
-                  {iconComponent || null}{buttonLabel}
+                  {buttonLabel}
                 </Button>
               </CardFooter>
             </Card>
@@ -394,7 +445,9 @@ export function CentralDashboard() {
       </Tabs>
 
       {/* Register Dialog */}
-      <Dialog open={isRegisterDialogOpen} onOpenChange={setIsRegisterDialogOpen}>
+      <Dialog open={isRegisterDialogOpen} onOpenChange={(open) => {
+        if (!registering) setIsRegisterDialogOpen(open);
+      }}>
         <DialogContent className="w-full sm:max-w-md" style={{ borderColor: themeColor }}>
           <DialogHeader>
             <DialogTitle style={{ color: themeColor }}>Register New User</DialogTitle>
@@ -412,6 +465,7 @@ export function CentralDashboard() {
                 placeholder="Manager full name"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
 
@@ -426,6 +480,7 @@ export function CentralDashboard() {
                 placeholder="main.user@example.com"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
 
@@ -440,6 +495,7 @@ export function CentralDashboard() {
                 placeholder="e.g., 003, 4545, AB12, FR-xyz"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
 
@@ -454,7 +510,33 @@ export function CentralDashboard() {
                 placeholder="+91 98765 43210"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
+            </div>
+
+            {/* Password (with eye toggle) */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
+              <Label htmlFor="password" className="text-right sm:col-span-1">Password</Label>
+              <div className="relative sm:col-span-3">
+                <Input
+                  id="password"
+                  type={showRegisterPwd ? 'text' : 'password'}
+                  value={registerForm.password}
+                  onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
+                  placeholder="Min 8 characters"
+                  style={{ borderColor: themeColorLight, paddingRight: '2.5rem' }}
+                  disabled={registering}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterPwd(v => !v)}
+                  className="absolute inset-y-0 right-2 flex items-center"
+                  aria-label={showRegisterPwd ? 'Hide password' : 'Show password'}
+                  disabled={registering}
+                >
+                  {showRegisterPwd ? <EyeOff className="w-5 h-5 opacity-70" /> : <Eye className="w-5 h-5 opacity-70" />}
+                </button>
+              </div>
             </div>
 
             {/* Address */}
@@ -468,20 +550,7 @@ export function CentralDashboard() {
                 placeholder="Building, Street, City, PIN"
                 className="sm:col-span-3"
                 style={{ borderColor: themeColorLight }}
-              />
-            </div>
-
-            {/* Password */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
-              <Label htmlFor="password" className="text-right sm:col-span-1">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                value={registerForm.password}
-                onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
-                placeholder="Min 8 characters"
-                className="sm:col-span-3"
-                style={{ borderColor: themeColorLight }}
+                disabled={registering}
               />
             </div>
           </div>
@@ -491,6 +560,7 @@ export function CentralDashboard() {
               onClick={() => setIsRegisterDialogOpen(false)}
               style={{ borderColor: themeColor, color: themeColor }}
               className="hover:bg-[rgba(0,100,55,0.1)] w-full sm:w-auto"
+              disabled={registering}
             >
               Cancel
             </Button>
@@ -498,14 +568,15 @@ export function CentralDashboard() {
               onClick={handleRegister}
               style={{ backgroundColor: themeColor }}
               className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
+              disabled={registering}
             >
-              Register
+              {registering ? 'Registering…' : 'Register'}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Change Password Dialog */}
+      {/* Change Password Dialog (also with eye toggle) */}
       <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
         <DialogContent className="w-full sm:max-w-md" style={{ borderColor: themeColor }}>
           <DialogHeader>
@@ -527,15 +598,24 @@ export function CentralDashboard() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
               <Label htmlFor="newPassword" className="text-right sm:col-span-1">New Password</Label>
-              <Input
-                id="newPassword"
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Enter new password"
-                className="sm:col-span-3"
-                style={{ borderColor: themeColorLight }}
-              />
+              <div className="relative sm:col-span-3">
+                <Input
+                  id="newPassword"
+                  type={showChangePwd ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Enter new password"
+                  style={{ borderColor: themeColorLight, paddingRight: '2.5rem' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowChangePwd(v => !v)}
+                  className="absolute inset-y-0 right-2 flex items-center"
+                  aria-label={showChangePwd ? 'Hide password' : 'Show password'}
+                >
+                  {showChangePwd ? <EyeOff className="w-5 h-5 opacity-70" /> : <Eye className="w-5 h-5 opacity-70" />}
+                </button>
+              </div>
             </div>
           </div>
           <div className="flex flex-col sm:flex-row justify-end gap-2">
@@ -553,30 +633,6 @@ export function CentralDashboard() {
               className="hover:bg-[rgb(0,80,40)] w-full sm:w-auto"
             >
               Save Password
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Registered Users Dialog (stub — functionality to be added) */}
-      <Dialog open={isUsersDialogOpen} onOpenChange={setIsUsersDialogOpen}>
-        <DialogContent className="w-full sm:max-w-lg" style={{ borderColor: themeColor }}>
-          <DialogHeader>
-            <DialogTitle style={{ color: themeColor }}>Registered Users</DialogTitle>
-            <DialogDescription>
-              We’ll wire this up to list/search users. Tell me the exact functionality you want and I’ll plug it in.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="text-sm text-muted-foreground">
-            Placeholder content goes here.
-          </div>
-          <div className="flex justify-end">
-            <Button
-              onClick={() => setIsUsersDialogOpen(false)}
-              style={{ backgroundColor: themeColor }}
-              className="hover:bg-[rgb(0,80,40)]"
-            >
-              Close
             </Button>
           </div>
         </DialogContent>
