@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Calendar, Download, TrendingUp } from 'lucide-react';
+import { Calendar, Download, TrendingUp, Building2, ChevronDown, Search } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import * as XLSX from 'xlsx';
@@ -42,11 +42,39 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   const [weeklyData, setWeeklyData] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedFranchise, setSelectedFranchise] = useState<string>(isCentral ? '' : userFranchiseId);
+  const [searchInput, setSearchInput] = useState<string>(isCentral ? '' : displayFromId(userFranchiseId));
   const [franchiseList, setFranchiseList] = useState<string[]>([]);
   const [startDate, setStartDate] = useState<Date | null>(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const [endDate, setEndDate] = useState<Date | null>(new Date());
   const [totalOrders, setTotalOrders] = useState<number>(0);
   const { toast } = useToast();
+
+  // ------- ID normalization / display helpers -------
+  function toFranchiseId(input: string): string {
+    const trimmed = input.trim().toUpperCase();
+    // Allow CENTRAL alias
+    if (trimmed === 'CENTRAL') return 'FR-CENTRAL';
+    // If user typed full ID already, normalize zero padding
+    const fullMatch = trimmed.match(/^FR-(\d+)$/i);
+    if (fullMatch) return `FR-${fullMatch[1].padStart(4, '0')}`;
+    // If user typed just digits, convert to FR-####
+    if (/^\d+$/.test(trimmed)) return `FR-${trimmed.padStart(4, '0')}`;
+    // Otherwise, return as-is (allows non-standard IDs too)
+    return trimmed;
+  }
+
+  function displayFromId(id: string): string {
+    if (!id) return '';
+    if (id.toUpperCase() === 'FR-CENTRAL') return 'CENTRAL';
+    const m = id.match(/^FR-(\d+)$/i);
+    return m ? m[1] : id;
+  }
+
+  function displayLabel(id: string): string {
+    // For dropdown labels
+    if (id.toUpperCase() === 'FR-CENTRAL') return 'CENTRAL';
+    return id;
+  }
 
   // ------- IST helpers -------
   const ymdIST = (d: Date) =>
@@ -113,7 +141,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         const d = new Date(parsed.startISO);
         if (!Number.isNaN(d.getTime())) return d;
       } else {
-        // stale entry — let Bill History clear it, but we ignore it here
         return null;
       }
     } catch {
@@ -133,39 +160,68 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFranchise, startDate, endDate]);
 
-  // --- Franchise list loading with multiple fallbacks ---
+  // ---- Distinct from menu_items (captures franchises with items but no bills) ----
+  const distinctFranchisesFromMenuItems = async (): Promise<string[]> => {
+    const pageSize = 1000;
+    let from = 0;
+    const ids = new Set<string>();
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await supabase
+        .from('menu_items')
+        .select('franchise_id')
+        .order('id', { ascending: true })
+        .range(from, to);
+      if (error) break;
+      if (!data || data.length === 0) break;
+      for (const row of data as { franchise_id: string | null }[]) {
+        if (row.franchise_id) ids.add(row.franchise_id);
+      }
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    return Array.from(ids);
+  };
+
+  // --- Franchise list loading with multiple fallbacks (includes franchises with no bills) ---
   const fetchFranchiseList = async () => {
     try {
-      // 1) Prefer a dedicated `franchises` table if it exists
       let list: string[] = [];
-      const fromFranchises = await supabase.from('franchises').select('id').order('id');
-      if (!fromFranchises.error && fromFranchises.data && fromFranchises.data.length > 0) {
-        list = (fromFranchises.data as { id: string }[]).map((r) => r.id);
+
+      // Prefer RPC that returns ALL franchises (create as SECURITY DEFINER server-side)
+      const rpcAll = await supabase.rpc('get_all_franchises');
+      if (!rpcAll.error && Array.isArray(rpcAll.data) && rpcAll.data.length > 0) {
+        list = (rpcAll.data as any[]).map((r) =>
+          typeof r === 'string' ? r : (r.id ?? r.franchise_id ?? r.code)
+        );
       } else {
-        // 2) Try RPC that returns distinct ids (define it server-side if not present)
-        const fromRpc = await supabase.rpc('get_distinct_franchises');
-        if (!fromRpc.error && fromRpc.data && fromRpc.data.length > 0) {
-          list = (fromRpc.data as any[]).map((r) => (typeof r === 'string' ? r : r.franchise_id));
-        } else {
-          // 3) Fallback: paginate bills and build a distinct list (subject to RLS!)
-          list = await fallbackDistinctFranchisesFromBills();
+        const fromFranchises = await supabase.from('franchises').select('id').order('id');
+        if (!fromFranchises.error && fromFranchises.data && fromFranchises.data.length > 0) {
+          list = list.concat((fromFranchises.data as { id: string }[]).map((r) => r.id));
         }
+        const fromMenu = await distinctFranchisesFromMenuItems();
+        list = list.concat(fromMenu);
+        const fromBills = await fallbackDistinctFranchisesFromBills();
+        list = list.concat(fromBills);
       }
+
+      // Ensure FR-CENTRAL is present if you use it
+      list.push('FR-CENTRAL');
 
       list = Array.from(new Set(list)).filter(Boolean).sort();
       setFranchiseList(list);
 
       // Ensure selectedFranchise is valid for the new list
       if (list.length > 0 && selectedFranchise && !list.includes(selectedFranchise)) {
-        setSelectedFranchise(''); // reset to "All Franchises" if previously selected is not available
+        setSelectedFranchise('');
+        setSearchInput('');
       }
 
-      // Helpful hint if only one found (often RLS)
       if (isCentral && list.length <= 1) {
         toast({
           title: 'Limited franchise list',
           description:
-            'Only a single franchise is visible. If you expect more, check your RLS policies or use a central-safe source (table or RPC).',
+            'Only a single franchise is visible. If you expect more, check your RLS policies or expose a central-safe source (table/RPC).',
         });
       }
     } catch (error: any) {
@@ -271,7 +327,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
       const startYMD = ymdIST(s);
       const endYMD = ymdIST(e);
 
-      // utility to add days to YMD (in IST)
       const addDaysYMD = (ymd: string, days: number) => {
         const d = new Date(`${ymd}T12:00:00+05:30`);
         d.setDate(d.getDate() + days);
@@ -299,7 +354,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         let created = new Date(bill.created_at);
         const shiftStart = getShiftFor(bill.franchise_id);
         if (shiftStart && created >= shiftStart) {
-          // Shift this bill by +1 day for display/grouping
           const shifted = new Date(created);
           shifted.setDate(shifted.getDate() + 1);
           created = shifted;
@@ -307,7 +361,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
 
         const key = dateKeyFromTimestampIST(created.toISOString());
         const row = dayMap.get(key);
-        if (!row) continue; // out of seeded range
+        if (!row) continue;
 
         row.revenue += Number(bill.total) || 0;
         row.orders += 1;
@@ -322,7 +376,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
       );
 
       setWeeklyData(filled);
-      // Keep totals in sync with exactly what we show
       setTotalOrders(bills.length);
     } catch (error: any) {
       toast({
@@ -367,8 +420,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   const totalWeekRevenue = weeklyData.reduce((sum, day) => sum + day.revenue, 0);
   const avgWeeklyOrderValue = totalOrders > 0 ? totalWeekRevenue / totalOrders : 0;
 
-  const handleGetDetails = () => fetchWeeklyData();
-
   if (loading) return <div className="text-center py-8">Loading weekly performance...</div>;
 
   return (
@@ -382,22 +433,58 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
             </div>
             <div className="flex items-center gap-4">
               {isCentral && (
-                <div className="relative flex-1 max-w-md">
-                  <select
-                    value={selectedFranchise}
-                    onChange={(e) => setSelectedFranchise(e.target.value)}
-                    className="border p-2 rounded-md w-full"
-                  >
-                    <option value="">All Franchises</option>
-                    {franchiseList.map((franchise) => (
-                      <option key={franchise} value={franchise}>
-                        {franchise}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <>
+                  {/* Search bar to type numeric code or "CENTRAL" (press Enter to fetch) */}
+                  <div className="relative w-48 sm:w-64">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-700 opacity-70" />
+                    <input
+                      type="text"
+                      value={searchInput}
+                      onChange={(e) => setSearchInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const id = toFranchiseId(searchInput);
+                          setSelectedFranchise(id);
+                          setSearchInput(displayFromId(id)); // keep numeric/CENTRAL view
+                        }
+                      }}
+                      placeholder='Enter code (e.g., 0005) or "CENTRAL"…'
+                      className="w-full rounded-xl border-0 ring-2 ring-emerald-600/40 focus:ring-4 focus:ring-emerald-600/90 pl-9 pr-3 py-2 h-10 text-sm bg-white/90 backdrop-blur-sm"
+                    />
+                  </div>
+
+                  {/* Dropdown (values are full IDs; labels show CENTRAL for FR-CENTRAL) */}
+                  <div className="relative flex-1 max-w-md">
+                    <div className="pointer-events-none absolute inset-0 rounded-xl blur-sm bg-gradient-to-r from-emerald-500 via-lime-400 to-emerald-600 opacity-40" />
+                    <div className="relative rounded-xl border bg-white/90 backdrop-blur-sm">
+                      {/* Left icon */}
+                      <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                        <Building2 className="h-4 w-4 opacity-70 text-emerald-700" />
+                      </div>
+                      {/* Right custom arrow */}
+                      <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">
+                        <ChevronDown className="h-4 w-4 opacity-70 text-emerald-700" />
+                      </div>
+                      <select
+                        value={selectedFranchise}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedFranchise(val);
+                          setSearchInput(displayFromId(val)); // show just digits or CENTRAL in input
+                        }}
+                        className="appearance-none pl-8 pr-10 py-2 h-10 w-full rounded-xl border-0 ring-2 ring-emerald-600/40 focus:ring-4 focus:ring-emerald-600/90 transition-all text-sm bg-transparent"
+                      >
+                        <option value="">All Franchises</option>
+                        {franchiseList.map((franchise) => (
+                          <option key={franchise} value={franchise}>
+                            {displayLabel(franchise)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </>
               )}
-              <Button onClick={handleGetDetails} variant="outline">Get Data</Button>
               <Button onClick={exportToExcel} variant="outline" disabled={weeklyData.length === 0}>
                 <Download className="h-4 w-4 mr-2" />
                 Export Excel
@@ -405,6 +492,13 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
             </div>
           </div>
         </CardHeader>
+
+        {/* Empty-state banner when a specific franchise has no data */}
+        {isCentral && selectedFranchise && weeklyData.length === 0 && (
+          <div className="mx-6 -mt-2 mb-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-amber-800">
+            No data available for franchise <span className="font-semibold">{selectedFranchise}</span> in the selected date range.
+          </div>
+        )}
 
         <CardContent>
           <div className="mb-6 flex flex-wrap gap-4">
@@ -432,7 +526,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                 minDate={startDate || undefined}
                 dateFormat="dd/MM/yyyy"
                 className="border p-2 rounded-md w-full"
-                placeholderText="Select end date"
               />
             </div>
           </div>
@@ -453,7 +546,7 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
             <Card>
               <CardContent className="p-4 text-center">
                 <p className="text-sm text-muted-foreground">Avg Order Value</p>
-                <p className="text-2xl font-bold">₹{avgWeeklyOrderValue.toFixed(2)}</p>
+                <p className="text-2xl font-bold">₹{(totalOrders > 0 ? totalWeekRevenue / totalOrders : 0).toFixed(2)}</p>
               </CardContent>
             </Card>
           </div>

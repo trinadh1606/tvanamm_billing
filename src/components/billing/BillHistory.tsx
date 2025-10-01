@@ -5,9 +5,18 @@ import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Calendar, Download, ArrowUpDown, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
+import { Calendar, Download, ArrowUpDown, ChevronLeft, ChevronRight, LogOut, Building2 } from 'lucide-react';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
+
+// NEW: shadcn select (for aligned, “crazy” styled dropdown)
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
 
 interface Bill {
   id: number;
@@ -35,8 +44,11 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   const [bills, setBills] = useState<Bill[]>([]);
   const [filteredBills, setFilteredBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedFranchise, setSelectedFranchise] = useState<string>('ALL');
+
+  // 🔁 Now this list is “ALL franchises”, not just those with bills
   const [franchiseList, setFranchiseList] = useState<string[]>([]);
+  const [selectedFranchise, setSelectedFranchise] = useState<string>('ALL');
+
   const [fromDate, setFromDate] = useState<Date | undefined>();
   const [toDate, setToDate] = useState<Date | undefined>();
   const [sortField, setSortField] = useState<SortField>('created_at');
@@ -63,7 +75,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     return `${yyyy}-${mm}-${dd}`;
   };
 
-  // which franchise is the button controlling?
   const activeFranchiseId: string | null = isCentral
     ? (selectedFranchise !== 'ALL' ? selectedFranchise : null)
     : (franchiseId ?? null);
@@ -101,7 +112,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
   useEffect(() => {
     fetchBills();
-    if (isCentral) fetchFranchiseList();
+    if (isCentral) fetchAllFranchises(); // ⬅️ replaced fetchFranchiseList()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [franchiseId, role]);
 
@@ -124,41 +135,51 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     return x.toISOString();
   };
 
-  // ---------- CENTRAL FRANCHISE LIST (RPC first, then fallback) ----------
-  const fetchFranchiseList = async () => {
+  // ---------- Collect ALL franchises (multiple sources, widest net) ----------
+  const fetchAllFranchises = async () => {
     try {
-      // 1) Recommended: central RPC that bypasses RLS (SECURITY DEFINER)
-      const rpc = await supabase.rpc('get_distinct_franchises');
       let list: string[] = [];
 
-      if (!rpc.error && Array.isArray(rpc.data) && rpc.data.length > 0) {
-        // rpc.data can be [{ franchise_id: '0001' }, ...] or just strings depending on your function
-        list = (rpc.data as any[]).map((r) =>
-          typeof r === 'string' ? r : r.franchise_id
-        );
+      // 1) Preferred RPC if you have a central catalog
+      const rpcAll = await supabase.rpc('get_all_franchises');
+      if (!rpcAll.error && Array.isArray(rpcAll.data) && rpcAll.data.length > 0) {
+        list = (rpcAll.data as any[]).map((r) => typeof r === 'string' ? r : (r.id ?? r.franchise_id ?? r.code));
       } else {
-        // 2) Fallback: paginate the bills table and build distinct list (subject to RLS)
-        list = await fallbackDistinctFranchisesFromBills();
+        // 2) Try a dedicated 'franchises' table if present
+        const tryFrTable = await supabase.from('franchises').select('id');
+        if (!tryFrTable.error && Array.isArray(tryFrTable.data) && tryFrTable.data.length > 0) {
+          list = list.concat((tryFrTable.data as { id: string }[]).map((r) => r.id));
+        }
+
+        // 3) Distinct from menu_items (covers franchises with items but no bills yet)
+        const fromMenu = await distinctFranchisesFromMenuItems();
+        list = list.concat(fromMenu);
+
+        // 4) Distinct from bills (your existing fallback)
+        const fromBills = await fallbackDistinctFranchisesFromBills();
+        list = list.concat(fromBills);
       }
+
+      // Always include FR-CENTRAL if your org uses it
+      list.push('FR-CENTRAL');
 
       list = Array.from(new Set(list)).filter(Boolean).sort();
       setFranchiseList(list);
 
-      // Sanity hint if RLS still restricts results
-      if (list.length <= 1) {
+      if (list.length === 0) {
         toast({
-          title: 'Limited franchise list',
-          description:
-            'Only one (or none) franchise is visible. If you expect more, ensure you created the SECURITY DEFINER RPC (or loosen RLS for central).',
+          title: 'No franchises found',
+          description: 'Could not discover franchise IDs from any source.',
+          variant: 'destructive',
         });
       }
 
-      // Keep selection valid
+      // keep selection valid
       if (selectedFranchise !== 'ALL' && !list.includes(selectedFranchise)) {
         setSelectedFranchise('ALL');
       }
     } catch (error) {
-      console.error('Error fetching franchise list:', error);
+      console.error('Error fetching all franchises:', error);
       toast({
         title: 'Error',
         description: 'Failed to fetch franchise list',
@@ -167,7 +188,30 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
   };
 
-  // Fallback distinct collector (will only return what RLS allows)
+  // Distinct franchises via menu_items
+  const distinctFranchisesFromMenuItems = async (): Promise<string[]> => {
+    const pageSize = 1000;
+    let from = 0;
+    const ids = new Set<string>();
+    while (true) {
+      const to = from + pageSize - 1;
+      const { data, error } = await supabase
+        .from('menu_items')
+        .select('franchise_id')
+        .order('id', { ascending: true })
+        .range(from, to);
+      if (error) break;
+      if (!data || data.length === 0) break;
+      for (const row of data as { franchise_id: string | null }[]) {
+        if (row.franchise_id) ids.add(row.franchise_id);
+      }
+      if (data.length < pageSize) break;
+      from += pageSize;
+    }
+    return Array.from(ids);
+  };
+
+  // Fallback distinct collector from bills (subject to RLS)
   const fallbackDistinctFranchisesFromBills = async (): Promise<string[]> => {
     const pageSize = 1000;
     let from = 0;
@@ -181,7 +225,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         .order('id', { ascending: true })
         .range(from, to);
 
-      if (error) throw error;
+      if (error) break;
       if (!data || data.length === 0) break;
 
       for (const row of data as { franchise_id: string | null }[]) {
@@ -408,6 +452,17 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     applyFiltersAndSort();
   };
 
+  // Helper: message for empty state
+  const emptyMessage = () => {
+    if (selectedFranchise !== 'ALL') {
+      if (fromDate || toDate) {
+        return `No bills for franchise ${selectedFranchise} for the selected date range.`;
+      }
+      return `No bills for franchise ${selectedFranchise}.`;
+    }
+    return 'No bills found';
+  };
+
   return (
     <Card className="bg-white">
       {/* Signout for today (per franchise) */}
@@ -514,23 +569,47 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
       <CardContent className="bg-white">
         {isCentral && (
-          <div className="mt-6 sm:mt-8 flex flex-wrap items-center gap-3 mb-4">
-            <label className="text-sm font-medium" style={{ color: 'rgb(0, 100, 55)' }}>
-              Franchise
-            </label>
-            <select
-              value={selectedFranchise}
-              onChange={(e) => setSelectedFranchise(e.target.value)}
-              className="px-3 py-2 rounded-md border text-sm focus:outline-none focus:ring-2"
-              style={{ borderColor: 'rgba(0, 100, 55, 0.3)', color: 'rgb(0, 100, 55)' }}
-            >
-              <option value="ALL">ALL</option>
-              {franchiseList.map((fid) => (
-                <option key={fid} value={fid}>
-                  {fid}
-                </option>
-              ))}
-            </select>
+          <div className="mt-6 sm:mt-8 flex flex-col sm:flex-row sm:items-center gap-3 mb-4 w-full">
+            <div className="w-full sm:w-[360px]">
+              <label className="text-sm font-medium block mb-1" style={{ color: 'rgb(0, 100, 55)' }}>
+                Franchise
+              </label>
+
+              {/* CRAZY, aligned, accessible dropdown */}
+              <div className="relative">
+                <div className="pointer-events-none absolute inset-0 rounded-xl blur-sm bg-gradient-to-r from-emerald-500 via-lime-400 to-emerald-600 opacity-40" />
+                <div className="relative rounded-xl border bg-white/90 backdrop-blur-sm">
+                  <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                    <Building2 className="h-4 w-4 opacity-70" style={{ color: 'rgb(0, 100, 55)' }} />
+                  </div>
+                  <Select
+                    value={selectedFranchise}
+                    onValueChange={(val) => {
+                      setSelectedFranchise(val);
+                      // auto-fetch on change (keeps button as optional manual refresh)
+                      fetchBills(val, fromDate, toDate);
+                    }}
+                  >
+                    <SelectTrigger
+                      className="pl-8 pr-10 py-2 h-10 w-full rounded-xl border-0 ring-2 ring-emerald-600/40 focus:ring-4 focus:ring-emerald-600/90 transition-all text-sm"
+                      style={{ color: 'rgb(0, 100, 55)' }}
+                    >
+                      <SelectValue placeholder="Select a franchise" />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl shadow-lg">
+                      <SelectItem value="ALL">ALL</SelectItem>
+                      {franchiseList.map((fid) => (
+                        <SelectItem key={fid} value={fid}>
+                          {fid}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1" />
 
             <Button
               onClick={() => fetchBills(selectedFranchise, fromDate, toDate)}
@@ -546,7 +625,9 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         {loading ? (
           <div className="text-center py-8">Loading bills...</div>
         ) : filteredBills.length === 0 ? (
-          <div className="text-center py-8 text-gray-600">No bills found</div>
+          <div className="text-center py-10 text-gray-700">
+            {emptyMessage()}
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="overflow-x-auto w-full">
