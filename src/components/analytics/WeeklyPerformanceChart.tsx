@@ -52,14 +52,10 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   // ------- ID normalization / display helpers -------
   function toFranchiseId(input: string): string {
     const trimmed = input.trim().toUpperCase();
-    // Allow CENTRAL alias
     if (trimmed === 'CENTRAL') return 'FR-CENTRAL';
-    // If user typed full ID already, normalize zero padding
     const fullMatch = trimmed.match(/^FR-(\d+)$/i);
     if (fullMatch) return `FR-${fullMatch[1].padStart(4, '0')}`;
-    // If user typed just digits, convert to FR-####
     if (/^\d+$/.test(trimmed)) return `FR-${trimmed.padStart(4, '0')}`;
-    // Otherwise, return as-is (allows non-standard IDs too)
     return trimmed;
   }
 
@@ -71,7 +67,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   }
 
   function displayLabel(id: string): string {
-    // For dropdown labels
     if (id.toUpperCase() === 'FR-CENTRAL') return 'CENTRAL';
     return id;
   }
@@ -130,7 +125,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
   };
   const shiftKey = (fid: string) => `bill_date_shift_state:${fid}`;
 
-  // Reads shift start for a specific franchise if the shift is active *today*; otherwise null.
   const getShiftStartForFranchise = (fid: string | null): Date | null => {
     if (!fid) return null;
     const raw = localStorage.getItem(shiftKey(fid));
@@ -160,7 +154,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFranchise, startDate, endDate]);
 
-  // ---- Distinct from menu_items (captures franchises with items but no bills) ----
   const distinctFranchisesFromMenuItems = async (): Promise<string[]> => {
     const pageSize = 1000;
     let from = 0;
@@ -183,12 +176,10 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     return Array.from(ids);
   };
 
-  // --- Franchise list loading with multiple fallbacks (includes franchises with no bills) ---
   const fetchFranchiseList = async () => {
     try {
       let list: string[] = [];
 
-      // Prefer RPC that returns ALL franchises (create as SECURITY DEFINER server-side)
       const rpcAll = await supabase.rpc('get_all_franchises');
       if (!rpcAll.error && Array.isArray(rpcAll.data) && rpcAll.data.length > 0) {
         list = (rpcAll.data as any[]).map((r) =>
@@ -205,13 +196,11 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         list = list.concat(fromBills);
       }
 
-      // Ensure FR-CENTRAL is present if you use it
       list.push('FR-CENTRAL');
 
       list = Array.from(new Set(list)).filter(Boolean).sort();
       setFranchiseList(list);
 
-      // Ensure selectedFranchise is valid for the new list
       if (list.length > 0 && selectedFranchise && !list.includes(selectedFranchise)) {
         setSelectedFranchise('');
         setSearchInput('');
@@ -261,7 +250,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     return Array.from(ids);
   };
 
-  // ---- Paginate to bypass Supabase's 1k row cap ----
   const fetchBillsPaged = async (startISO: string, endISO: string): Promise<BillRow[]> => {
     const pageSize = 1000;
     let from = 0;
@@ -300,19 +288,15 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
     try {
       if (!startDate || !endDate) throw new Error('Please select both start and end dates');
 
-      // Normalize and ensure start <= end
       let s = startDate;
       let e = endDate;
       if (s > e) [s, e] = [e, s];
 
-      // Build IST-inclusive bounds
       const startISO = buildISTStartISO(s);
       const endISO = buildISTEndISO(e);
 
-      // Fetch *all* bills in the range (with pagination)
       const bills = await fetchBillsPaged(startISO, endISO);
 
-      // PREP: shift start cache so we don't touch localStorage in a hot loop too many times
       const shiftCache = new Map<string, Date | null>();
       const getShiftFor = (fid: string) => {
         if (!shiftCache.has(fid)) {
@@ -321,7 +305,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         return shiftCache.get(fid) ?? null;
       };
 
-      // Seed day map for each IST date in range
       const dayMap = new Map<string, DayData>();
 
       const startYMD = ymdIST(s);
@@ -349,7 +332,6 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
         cur = addDaysYMD(cur, 1);
       }
 
-      // Aggregate bills per IST day, applying signout shift per franchise if active
       for (const bill of bills) {
         let created = new Date(bill.created_at);
         const shiftStart = getShiftFor(bill.franchise_id);
@@ -448,8 +430,8 @@ export function WeeklyPerformanceChart({ userFranchiseId, isCentral }: WeeklyPer
                           setSearchInput(displayFromId(id)); // keep numeric/CENTRAL view
                         }
                       }}
-                      placeholder='Enter code (e.g., 0005) or "CENTRAL"…'
-                      className="w-full rounded-xl border-0 ring-2 ring-emerald-600/40 focus:ring-4 focus:ring-emerald-600/90 pl-9 pr-3 py-2 h-10 text-sm bg-white/90 backdrop-blur-sm"
+                      placeholder='Enter code (e.g., 0005)'
+                      className="w-full rounded-xl border-0 ring-2 ring-emerald-600/40 focus:ring-4 focus:ring-emerald-600/90 pl-9 pr-3 h-10 py-0 text-sm leading-[2.5rem] bg-white/90 backdrop-blur-sm"
                     />
                   </div>
 
