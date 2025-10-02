@@ -32,6 +32,26 @@ const INR = new Intl.NumberFormat('en-IN', {
   maximumFractionDigits: 2,
 });
 
+// Persisted base for “lifetime” discounts (excludes today)
+// You can reset it to 0 in the console: localStorage.setItem('fr-central:discountsBase','0')
+const DISCOUNTS_BASE_KEY = 'fr-central:discountsBase';
+
+function getDiscountsBase(): number {
+  try {
+    const v = localStorage.getItem(DISCOUNTS_BASE_KEY);
+    if (v == null) return 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+function setDiscountsBase(n: number) {
+  try {
+    localStorage.setItem(DISCOUNTS_BASE_KEY, String(n || 0));
+  } catch {}
+}
+
 export function FRCentralDashboard() {
   const [stats, setStats] = useState<FRCentralStats>({
     todayRevenue: 0,
@@ -47,7 +67,11 @@ export function FRCentralDashboard() {
     avgOrderValue: 0,
   });
 
-  // Single date range (controls range summary + sales distribution)
+  // Discounts
+  const [totalDiscounts, setTotalDiscounts] = useState<number>(0);
+  const [todaysDiscounts, setTodaysDiscounts] = useState<number>(0);
+
+  // Date range (for the range summary section)
   const [dateFrom, setDateFrom] = useState<string>(''); // YYYY-MM-DD
   const [dateTo, setDateTo] = useState<string>('');     // YYYY-MM-DD
   const [rangeStats, setRangeStats] = useState<RangeStats>({
@@ -60,10 +84,14 @@ export function FRCentralDashboard() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('realtime');
 
-  // Build once so both summary + pie chart use identical bounds
+  // IST helpers
   const buildISTISO = (dateStr: string, endOfDay = false) => {
     const t = endOfDay ? '23:59:59.999' : '00:00:00.000';
     return new Date(`${dateStr}T${t}+05:30`).toISOString();
+  };
+  const buildISTHourISO = (dateStr: string, hour: number) => {
+    const hh = String(hour).padStart(2, '0');
+    return new Date(`${dateStr}T${hh}:00:00.000+05:30`).toISOString();
   };
 
   const startISO = useMemo(
@@ -75,7 +103,60 @@ export function FRCentralDashboard() {
     [dateTo]
   );
 
+  // ---------- Discounts: bill-first, paise-accurate ----------
+  // discount(bill) = max(0, sum(items.qty*price) - bill.total) with epsilon
+  const computeDiscountsFromBillsPaginated = async (opts: {
+    franchiseId: string;
+    startUtcIso?: string;
+    endUtcIso?: string;
+    epsilonPaise?: number; // default ₹1.00
+  }) => {
+    const PAGE = 1000;
+    let from = 0;
+    let discountsPaise = 0;
+    const eps = typeof opts.epsilonPaise === 'number' ? opts.epsilonPaise : 100;
+
+    while (true) {
+      let q = supabase
+        .from('bills_generated_billing')
+        .select('id,total,created_at,bill_items_generated_billing(qty,price)')
+        .eq('franchise_id', opts.franchiseId)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1);
+
+      if (opts.startUtcIso) q = q.gte('created_at', opts.startUtcIso);
+      if (opts.endUtcIso)   q = q.lte('created_at', opts.endUtcIso);
+
+      const { data, error } = await q as any;
+      if (error) throw error;
+
+      const bills = data ?? [];
+      if (bills.length === 0) break;
+
+      for (const b of bills) {
+        const itemsPaise = (b.bill_items_generated_billing ?? []).reduce((acc: number, it: any) => {
+          const qty = Number(it.qty) || 0;
+          const price = Number(it.price) || 0;
+          return acc + Math.round(qty * price * 100);
+        }, 0);
+
+        const totalPaise = Math.round(Number(b.total || 0) * 100);
+        const diff = itemsPaise - totalPaise;
+        if (diff > eps) discountsPaise += diff;
+      }
+
+      if (bills.length < PAGE) break;
+      from += PAGE;
+    }
+
+    return Math.round(discountsPaise) / 100; // ₹
+  };
+
   useEffect(() => {
+    if (localStorage.getItem(DISCOUNTS_BASE_KEY) == null) {
+      setDiscountsBase(0);
+    }
+
     fetchFRCentralStats().finally(() => setLoading(false));
     fetchFRCentralTotalStats();
 
@@ -96,7 +177,6 @@ export function FRCentralDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-refresh range stats whenever the date range changes
   useEffect(() => {
     if (startISO && endISO) fetchRangeStats(startISO, endISO);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -106,14 +186,21 @@ export function FRCentralDashboard() {
     try {
       const now = new Date();
       const istNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-      const today = istNow.toISOString().split('T')[0];
-      const currentHourStart = `${today}T${istNow.getHours().toString().padStart(2, '0')}:00:00`;
+      const y = istNow.getFullYear();
+      const m = String(istNow.getMonth() + 1).padStart(2, '0');
+      const d = String(istNow.getDate()).padStart(2, '0');
+      const todayStr = `${y}-${m}-${d}`;
+      const currentHourStartUtc = buildISTHourISO(todayStr, istNow.getHours());
+      const todayStartUtc = buildISTISO(todayStr, false);
+      const todayEndUtc = buildISTISO(todayStr, true);
 
+      // Today's bills (IST)
       const { data: todayBills, error } = await supabase
         .from('bills_generated_billing')
         .select('total, created_at')
         .eq('franchise_id', 'FR-CENTRAL')
-        .gte('created_at', today + 'T00:00:00')
+        .gte('created_at', todayStartUtc)
+        .lte('created_at', todayEndUtc)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -121,11 +208,23 @@ export function FRCentralDashboard() {
       const todayRevenue = (todayBills ?? []).reduce((s, b) => s + Number(b.total || 0), 0);
       const todayOrders = todayBills?.length || 0;
       const currentHourRevenue = (todayBills ?? [])
-        .filter((b) => b.created_at >= currentHourStart)
+        .filter((b) => b.created_at >= currentHourStartUtc)
         .reduce((s, b) => s + Number(b.total || 0), 0);
 
+      // Today's discounts (unchanged)
+      const todayDisc = await computeDiscountsFromBillsPaginated({
+        franchiseId: 'FR-CENTRAL',
+        startUtcIso: todayStartUtc,
+        endUtcIso: todayEndUtc,
+      });
+      setTodaysDiscounts(todayDisc);
+
+      // Total discounts = persisted base + today's
+      const base = getDiscountsBase();
+      setTotalDiscounts((Number.isFinite(base) ? base : 0) + (Number.isFinite(todayDisc) ? todayDisc : 0));
+
       let status: FRCentralStats['status'] = 'quiet';
-      const currentHourOrders = (todayBills ?? []).filter((b) => b.created_at >= currentHourStart).length;
+      const currentHourOrders = (todayBills ?? []).filter((b) => b.created_at >= currentHourStartUtc).length;
       if (currentHourOrders >= 10) status = 'very-busy';
       else if (currentHourOrders >= 5) status = 'busy';
       else if (currentHourOrders >= 2) status = 'normal';
@@ -144,29 +243,11 @@ export function FRCentralDashboard() {
 
   const fetchFRCentralTotalStats = async () => {
     try {
-      let totalRevenue = 0;
+      // ✅ No server aggregate calls (prevents 400 errors)
+      // Total revenue (client-side sum)
+      const totalRevenue = await clientSideSumTotal('FR-CENTRAL');
 
-      const agg1 = await supabase
-        .from('bills_generated_billing')
-        .select('sum_total:sum(total)')
-        .eq('franchise_id', 'FR-CENTRAL')
-        .maybeSingle();
-
-      if (agg1.data?.sum_total != null) {
-        totalRevenue = Number(agg1.data.sum_total);
-      } else {
-        const agg2 = await supabase
-          .from('bills_generated_billing')
-          .select('sum_total:sum(total)')
-          .eq('franchise_id', 'FR-CENTRAL');
-
-        if (Array.isArray(agg2.data) && agg2.data[0]?.sum_total != null) {
-          totalRevenue = Number(agg2.data[0].sum_total);
-        } else {
-          totalRevenue = await clientSideSumTotal('FR-CENTRAL');
-        }
-      }
-
+      // Total orders (exact count head request is fine)
       const { count, error: countErr } = await supabase
         .from('bills_generated_billing')
         .select('id', { head: true, count: 'exact' })
@@ -174,16 +255,20 @@ export function FRCentralDashboard() {
       if (countErr) throw countErr;
 
       const totalOrders = count ?? 0;
+
       setTotalStats({
         totalRevenue: Number.isFinite(totalRevenue) ? totalRevenue : 0,
         totalOrders,
         avgOrderValue: totalOrders > 0 ? totalRevenue / totalOrders : 0,
       });
+
+      // NOTE: totalDiscounts is derived in fetchFRCentralStats (base + today).
     } catch (error) {
       console.error('Error fetching total stats:', error);
     }
   };
 
+  // Client-side sum helpers (paginated)
   const clientSideSumTotal = async (franchiseId: string): Promise<number> => {
     let sum = 0;
     const pageSize = 1000;
@@ -205,41 +290,12 @@ export function FRCentralDashboard() {
     return sum;
   };
 
-  // Robust range stats with a client-side fallback sum
   const fetchRangeStats = async (startISO: string, endISO: string) => {
     setRangeLoading(true);
     try {
-      let revenue = 0;
+      // ✅ No server aggregate calls here either
+      const revenue = await clientSideRangeSum('FR-CENTRAL', startISO, endISO);
 
-      // Try aggregate (single row)
-      const sumTry1 = await supabase
-        .from('bills_generated_billing')
-        .select('sum_total:sum(total)')
-        .eq('franchise_id', 'FR-CENTRAL')
-        .gte('created_at', startISO)
-        .lte('created_at', endISO)
-        .maybeSingle();
-
-      if (sumTry1.data?.sum_total != null) {
-        revenue = Number(sumTry1.data.sum_total);
-      } else {
-        // Try aggregate (array row)
-        const sumTry2 = await supabase
-          .from('bills_generated_billing')
-          .select('sum_total:sum(total)')
-          .eq('franchise_id', 'FR-CENTRAL')
-          .gte('created_at', startISO)
-          .lte('created_at', endISO);
-
-        if (Array.isArray(sumTry2.data) && sumTry2.data[0]?.sum_total != null) {
-          revenue = Number(sumTry2.data[0].sum_total);
-        } else {
-          // Final fallback: client-side paginated sum in the range
-          revenue = await clientSideRangeSum('FR-CENTRAL', startISO, endISO);
-        }
-      }
-
-      // Exact order count in the range
       const { count } = await supabase
         .from('bills_generated_billing')
         .select('id', { head: true, count: 'exact' })
@@ -261,12 +317,10 @@ export function FRCentralDashboard() {
     }
   };
 
-  // Client-side range sum fallback
   const clientSideRangeSum = async (franchiseId: string, startISO: string, endISO: string) => {
     let sum = 0;
     const pageSize = 1000;
     let from = 0;
-
     while (true) {
       const to = from + pageSize - 1;
       const { data, error } = await supabase
@@ -277,10 +331,8 @@ export function FRCentralDashboard() {
         .lte('created_at', endISO)
         .order('id', { ascending: true })
         .range(from, to);
-
       if (error) throw error;
       if (!data || data.length === 0) break;
-
       for (const row of data) sum += Number((row as any).total || 0);
       if (data.length < pageSize) break;
       from += pageSize;
@@ -294,8 +346,8 @@ export function FRCentralDashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Row 1: Total Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Row 1: Total Stats — all four in one line */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card><CardContent className="p-6">
           <p className="text-sm font-medium text-muted-foreground">Total Orders</p>
           <p className="text-2xl font-bold">{totalStats.totalOrders}</p>
@@ -310,10 +362,16 @@ export function FRCentralDashboard() {
           <p className="text-sm font-medium text-muted-foreground">Avg Order Value</p>
           <p className="text-2xl font-bold">{INR.format(totalStats.avgOrderValue || 0)}</p>
         </CardContent></Card>
+
+        {/* Total Discounts (FR-CENTRAL only) */}
+        <Card><CardContent className="p-6">
+          <p className="text-sm font-medium text-muted-foreground">Total Discounts</p>
+          <p className="text-2xl font-bold">{INR.format(totalDiscounts || 0)}</p>
+        </CardContent></Card>
       </div>
 
-      {/* Row 2: Today's Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Row 2: Today's Stats — all four in one line */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card><CardContent className="p-6">
           <p className="text-sm font-medium text-muted-foreground">Today&apos;s Orders</p>
           <p className="text-2xl font-bold">{stats.todayOrders}</p>
@@ -329,6 +387,12 @@ export function FRCentralDashboard() {
           <p className="text-2xl font-bold">
             {INR.format(stats.todayOrders > 0 ? stats.todayRevenue / stats.todayOrders : 0)}
           </p>
+        </CardContent></Card>
+
+        {/* Today’s Discounts (FR-CENTRAL only) */}
+        <Card><CardContent className="p-6">
+          <p className="text-sm font-medium text-muted-foreground">Today&apos;s Discounts</p>
+          <p className="text-2xl font-bold">{INR.format(todaysDiscounts || 0)}</p>
         </CardContent></Card>
       </div>
 
@@ -402,7 +466,6 @@ export function FRCentralDashboard() {
             </CardHeader>
             <CardContent>
               <div className="space-y-6">
-                {/* ... your placeholder insights ... */}
                 <Card>
                   <CardHeader><CardTitle>Performance Trends</CardTitle></CardHeader>
                   <CardContent>

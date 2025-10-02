@@ -9,7 +9,6 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Plus, Edit, Trash2, Menu, RefreshCw, Search } from 'lucide-react';
-import { MasterMenuSync } from './MasterMenuSync';
 
 interface MenuItem {
   id: number;
@@ -104,8 +103,6 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
-  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
-  const [syncingItem, setSyncingItem] = useState<MenuItem | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     price: '',
@@ -199,7 +196,7 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
         .select('franchise_id')
         .order('franchise_id', { ascending: true });
 
-    if (error) throw error;
+      if (error) throw error;
 
       const map = new Map<string, string>();
       (data ?? []).forEach((row: any) => {
@@ -284,11 +281,6 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
       console.error('handleDelete error:', error);
       toast({ title: 'Error', description: 'Failed to delete menu item', variant: 'destructive' });
     }
-  };
-
-  const handleSync = (item: MenuItem) => {
-    setSyncingItem(item);
-    setSyncDialogOpen(true);
   };
 
   const handleFetchByFranchise = () => {
@@ -646,17 +638,6 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
                         <Button size="sm" variant="outline" onClick={() => handleEdit(item)}>
                           <Edit className="h-3 w-3" />
                         </Button>
-                        {isCentral && (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => handleSync(item)}
-                            className="text-white"
-                            style={{ backgroundColor: 'rgb(0,100,55)' }}
-                          >
-                            <RefreshCw className="h-3 w-3" />
-                          </Button>
-                        )}
                         <Button size="sm" variant="destructive" onClick={() => handleDelete(item.id)}>
                           <Trash2 className="h-3 w-3" />
                         </Button>
@@ -669,24 +650,6 @@ export function MenuManager({ isCentral = false }: MenuManagerProps) {
           </div>
         )}
       </CardContent>
-
-      {syncingItem && (
-        <MasterMenuSync
-          open={syncDialogOpen}
-          onOpenChange={setSyncDialogOpen}
-          sourceItem={syncingItem}
-          onSyncComplete={() => {
-            if (isCentral) {
-              if (selectedFranchiseId) fetchMenuItems(selectedFranchiseId);
-            } else if (franchiseId) {
-              fetchMenuItems(franchiseId);
-            }
-            setSyncDialogOpen(false);
-            setSyncingItem(null);
-          }}
-          loggedInFranchiseId={franchiseId || ''}
-        />
-      )}
     </Card>
   );
 }

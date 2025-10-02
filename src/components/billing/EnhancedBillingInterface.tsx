@@ -52,7 +52,6 @@ interface BillItem {
 }
 
 // ----- Helpers to handle franchise id variants -----
-// Canonical form: "FR-0000" for numeric ids, keep "FR-CENTRAL" and "FR-XXXX" as-is (zero-pad numeric suffix)
 const canonicalFrId = (raw?: string) => {
   const id = (raw || '').trim();
   if (!id) return '';
@@ -73,13 +72,12 @@ const canonicalFrId = (raw?: string) => {
   return up;
 };
 
-// For querying: try canonical ("FR-0002"), the zero-padded numeric ("0002"), and the non-padded numeric ("2")
 const idsToTry = (raw?: string) => {
   const canon = canonicalFrId(raw);
   if (!canon) return [];
   if (canon === 'FR-CENTRAL') return [canon];
-  const num4 = canon.slice(3); // e.g. "0002"
-  const numNoPad = String(parseInt(num4, 10)); // "2"
+  const num4 = canon.slice(3);
+  const numNoPad = String(parseInt(num4, 10));
   return Array.from(new Set([canon, num4, numNoPad]));
 };
 
@@ -91,6 +89,10 @@ export function EnhancedBillingInterface() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [showCompatibilityGuide, setShowCompatibilityGuide] = useState(false);
+
+  // NEW: discount state
+  const [discountMode, setDiscountMode] = useState<'amount' | 'percent'>('amount');
+  const [discountInput, setDiscountInput] = useState<string>(''); // user entry
 
   const { franchiseId, user } = useAuth();
   const { toast } = useToast();
@@ -185,7 +187,28 @@ export function EnhancedBillingInterface() {
     setBillItems(items => items.filter(item => item.id !== id));
   };
 
-  const total = billItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  // CHANGED: name this 'subtotal' (pre-discount)
+  const subtotal = useMemo(
+    () => billItems.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    [billItems]
+  );
+
+  // NEW: computed discount & payable
+  const discountAmount = useMemo(() => {
+    const raw = parseFloat(discountInput);
+    const val = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+    if (discountMode === 'amount') {
+      return Math.min(val, subtotal);
+    }
+    // percent
+    const pct = Math.min(100, val);
+    return Math.min((pct / 100) * subtotal, subtotal);
+  }, [discountInput, discountMode, subtotal]);
+
+  const payableTotal = useMemo(
+    () => Number(Math.max(0, subtotal - discountAmount).toFixed(2)),
+    [subtotal, discountAmount]
+  );
 
   const generateBill = async (paymentMode: string) => {
     if (billItems.length === 0) {
@@ -200,13 +223,14 @@ export function EnhancedBillingInterface() {
     setLoading(true);
 
     try {
+      // Use final payable total for the bill
       const { data: billData, error: billError } = await supabase
         .from('bills_generated_billing')
         .insert({
-          franchise_id: canonicalFrId(franchiseId), // save canonical form
+          franchise_id: canonicalFrId(franchiseId),
           mode_payment: paymentMode,
           created_by: user?.id,
-          total
+          total: payableTotal // <-- after discount
         })
         .select()
         .single();
@@ -236,16 +260,24 @@ export function EnhancedBillingInterface() {
       if (isConnected) {
         const receiptData = {
           items: billItems,
-          total,
+          total: payableTotal, // print discounted total
           paymentMode,
           billNumber: billData.id,
-          date: billData.created_at || new Date()
+          date: billData.created_at || new Date(),
+          meta: {
+            subtotal,
+            discountAmount,
+            discountMode,
+            discountValue: discountInput
+          }
         };
         await printReceipt(receiptData);
       }
 
       setBillItems([]);
       setPaymentDialogOpen(false);
+      setDiscountInput('');
+      setDiscountMode('amount');
     } catch (error: any) {
       toast({
         title: 'Error',
@@ -258,16 +290,12 @@ export function EnhancedBillingInterface() {
   };
 
   const filteredItems = useMemo(() => {
-    // If searching, ignore category filter
     if (searchTerm.trim()) {
       return menuItems.filter(item =>
         item.name.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
-
-    // If no search, apply category filter
     if (selectedCategory === 'all') return menuItems;
-
     return menuItems.filter(
       item =>
         item.category === selectedCategory ||
@@ -276,26 +304,18 @@ export function EnhancedBillingInterface() {
   }, [menuItems, searchTerm, selectedCategory]);
 
   const groupedMenuItems = useMemo(() => {
-    // When searching, put everything in "all"
-    if (searchTerm.trim()) {
-      return { all: filteredItems };
-    }
-
-    // Group by category when not searching
+    if (searchTerm.trim()) return { all: filteredItems };
     const groups: Record<string, MenuItem[]> = {};
     filteredItems.forEach(item => {
       const category = item.category || 'Others';
       if (!groups[category]) groups[category] = [];
       groups[category].push(item);
     });
-
     return groups;
   }, [filteredItems, searchTerm]);
 
   useEffect(() => {
-    if (searchTerm.trim()) {
-      setSelectedCategory('all');
-    }
+    if (searchTerm.trim()) setSelectedCategory('all');
   }, [searchTerm]);
 
   const categories = useMemo(
@@ -431,7 +451,7 @@ export function EnhancedBillingInterface() {
                   size="sm"
                   onClick={() => fallbackOptions?.printToSystemPrinter && fallbackOptions.printToSystemPrinter({
                     items: billItems,
-                    total: total,
+                    total: subtotal,
                     paymentMode: 'N/A',
                     billNumber: 'Preview',
                     date: new Date()
@@ -508,9 +528,10 @@ export function EnhancedBillingInterface() {
           {billItems.length > 0 && (
             <>
               <div className="border-t border-gray-200 pt-4 space-y-4">
+                {/* Keep summary outside popup as before (pre-discount) */}
                 <div className="flex justify-between text-xl font-bold text-gray-800">
                   <span>Total:</span>
-                  <span>₹{total.toFixed(2)}</span>
+                  <span>₹{subtotal.toFixed(2)}</span>
                 </div>
 
                 <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
@@ -529,6 +550,7 @@ export function EnhancedBillingInterface() {
                       <DialogTitle className="text-gray-800">Confirm & Select Payment Method</DialogTitle>
                     </DialogHeader>
 
+                    {/* Items list */}
                     <div className="max-h-60 overflow-y-auto border rounded-md p-3 bg-gray-50 space-y-2 mb-4">
                       {billItems.map(item => (
                         <div key={item.id} className="flex justify-between text-sm">
@@ -541,12 +563,98 @@ export function EnhancedBillingInterface() {
                           </div>
                         </div>
                       ))}
-                      <div className="border-t border-gray-300 pt-2 flex justify-between font-bold text-gray-800">
-                        <span>Total:</span>
-                        <span>₹{total.toFixed(2)}</span>
+                    </div>
+
+                    {/* NEW: Discount controls */}
+                    <div className="space-y-2 mb-4">
+                      <div className="text-sm font-medium text-gray-800">Discount</div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant={discountMode === 'amount' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setDiscountMode('amount')}
+                          style={discountMode === 'amount' ? { backgroundColor: 'rgb(0,100,55)', color: 'white' } : {}}
+                        >
+                          ₹ Amount
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={discountMode === 'percent' ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setDiscountMode('percent')}
+                          style={discountMode === 'percent' ? { backgroundColor: 'rgb(0,100,55)', color: 'white' } : {}}
+                        >
+                          % Percent
+                        </Button>
+                      </div>
+
+                      {/* Aligned inputs */}
+                      <div className="relative flex items-center">
+                        {discountMode === 'amount' ? (
+                          <>
+                            {/* LEFT PREFIX: ₹ */}
+                            <div className="pointer-events-none absolute left-0 inset-y-0 flex items-center pl-3 h-10">
+                              <span className="text-gray-500 text-sm leading-none align-middle">₹</span>
+                            </div>
+                            <Input
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              step="0.01"
+                              placeholder="0.00"
+                              value={discountInput}
+                              onChange={(e) => setDiscountInput(e.target.value)}
+                              className="h-10 pl-8 pr-3 text-sm leading-none"
+                            />
+                            <div className="text-xs text-gray-500 mt-1 pl-1">
+                              Max ₹{subtotal.toFixed(2)}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <Input
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              max={100}
+                              step="0.01"
+                              placeholder="0"
+                              value={discountInput}
+                              onChange={(e) => setDiscountInput(e.target.value)}
+                              className="h-10 pr-8 pl-8 text-sm leading-none ml-2"
+                            />
+                            {/* RIGHT SUFFIX: % */}
+                            <div className="pointer-events-none absolute right-0 inset-y-0 flex items-center pr-3 h-10">
+                              <span className="text-gray-500 text-sm leading-none align-middle"></span>
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1 pl-1 ml-2">
+                            Max 100%
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Summary with discount */}
+                      <div className="mt-2 border rounded-md p-3 bg-gray-50 space-y-1 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Subtotal</span>
+                          <span className="font-medium text-gray-800">₹{subtotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">
+                            Discount{discountMode === 'percent' && discountInput ? ` (${parseFloat(discountInput) || 0}%)` : ''}
+                          </span>
+                          <span className="font-medium text-rose-600">- ₹{discountAmount.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between pt-1 border-t">
+                          <span className="font-semibold text-gray-800">Total Payable</span>
+                          <span className="font-semibold text-gray-900">₹{payableTotal.toFixed(2)}</span>
+                        </div>
                       </div>
                     </div>
 
+                    {/* Payment buttons */}
                     <div className="grid grid-cols-2 gap-4">
                       <Button
                         size="lg"
@@ -588,7 +696,7 @@ export function EnhancedBillingInterface() {
                         onClick={() => {
                           const receiptData = {
                             items: billItems,
-                            total: total,
+                            total: subtotal,
                             paymentMode: 'cash',
                             billNumber: 'Preview',
                             date: new Date()
@@ -605,7 +713,7 @@ export function EnhancedBillingInterface() {
                         onClick={() => {
                           const receiptData = {
                             items: billItems,
-                            total: total,
+                            total: subtotal,
                             paymentMode: 'cash',
                             billNumber: 'Preview',
                             date: new Date()

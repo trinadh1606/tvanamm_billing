@@ -28,7 +28,7 @@ interface CategoryData {
 interface AllItem {
   item_name: string;
   total_quantity: number;
-  total_revenue: number; // adjusted to match bills
+  total_revenue: number; // INTEGER RUPEES for display
   category: string;
 }
 
@@ -181,7 +181,6 @@ export function PopularItemsLive() {
   ): { name: string; qty: number; category: string; adjustedPaise: number }[] => {
     const rawSum = items.reduce((s, it) => s + it.rawPaise, 0);
 
-    // If rawSum is zero (weird edge), just return zeros
     if (rawSum <= 0) {
       return items.map((it) => ({
         name: it.item_name,
@@ -193,32 +192,64 @@ export function PopularItemsLive() {
 
     const factor = billTotalPaise / rawSum;
 
-    // First pass: floor allocations & track remainders
     const floored: { idx: number; base: number; remainder: number }[] = items.map((it, idx) => {
       const exact = it.rawPaise * factor;
       const base = Math.floor(exact);
-      const remainder = exact - base; // fractional paise
+      const remainder = exact - base;
       return { idx, base, remainder };
     });
 
     const baseSum = floored.reduce((s, f) => s + f.base, 0);
-    let remaining = billTotalPaise - baseSum; // number of paise to distribute
+    let remaining = billTotalPaise - baseSum;
 
-    // Distribute remaining paise by largest remainder
     floored.sort((a, b) => b.remainder - a.remainder);
     for (let i = 0; i < floored.length && remaining > 0; i++) {
       floored[i].base += 1;
       remaining -= 1;
     }
 
-    // Map back
     floored.sort((a, b) => a.idx - b.idx);
-    return floored.map((f) => ({
-      name: items[f.idx].item_name,
-      qty: items[f.idx].qty,
-      category: items[f.idx].category,
+    return floored.map((f, i) => ({
+      name: items[i].item_name,
+      qty: items[i].qty,
+      category: items[i].category,
       adjustedPaise: f.base,
     }));
+  };
+
+  // ---------- NEW: convert paise-per-item to INTEGER rupees while keeping totals consistent ----------
+  const paiseToRupeesDistributed = <T extends { paise: number }>(
+    list: (T & { idx?: number })[],
+    targetRupees?: number // if omitted, uses Math.round(totalPaise/100)
+  ) => {
+    const withIdx = list.map((x, i) => ({ ...x, idx: i, rem: x.paise % 100, base: Math.floor(x.paise / 100) }));
+    const baseSum = withIdx.reduce((s, x) => s + x.base, 0);
+    const totalPaise = withIdx.reduce((s, x) => s + x.paise, 0);
+    let target = typeof targetRupees === 'number' ? targetRupees : Math.round(totalPaise / 100);
+    let extra = target - baseSum; // can be positive or negative
+
+    if (extra > 0) {
+      // give +1 rupee to the largest remainders
+      const byRemainderDesc = [...withIdx].sort((a, b) => b.rem - a.rem);
+      for (let i = 0; i < byRemainderDesc.length && extra > 0; i++) {
+        byRemainderDesc[i].base += 1;
+        extra -= 1;
+      }
+    } else if (extra < 0) {
+      // take -1 rupee from the smallest remainders (where possible)
+      const byRemainderAsc = [...withIdx].sort((a, b) => a.rem - b.rem);
+      for (let i = 0; i < byRemainderAsc.length && extra < 0; i++) {
+        if (byRemainderAsc[i].base > 0) {
+          byRemainderAsc[i].base -= 1;
+          extra += 1;
+        }
+      }
+    }
+
+    // restore original order
+    return withIdx
+      .sort((a, b) => (a.idx! - b.idx!))
+      .map(({ base, ...rest }) => ({ ...rest, rupeesInt: base }));
   };
 
   const fetchData = async (range?: { start?: string; end?: string }) => {
@@ -326,7 +357,7 @@ export function PopularItemsLive() {
         perBill.get(billId)!.push({ item_name: name, qty, price, category, rawPaise });
       }
 
-      // Accumulate adjusted totals across all bills
+      // Accumulate adjusted totals across all bills (paise)
       const itemAgg = new Map<string, { qty: number; paise: number; category: string }>();
 
       for (const [billId, items] of perBill.entries()) {
@@ -344,23 +375,21 @@ export function PopularItemsLive() {
         }
       }
 
-      // Flatten to items (in rupees)
-      const allItemsArr: AllItem[] = Array.from(itemAgg.entries())
-        .map(([name, v]) => ({
-          item_name: name,
-          total_quantity: v.qty,
-          total_revenue: v.paise / 100,
-          category: v.category,
-        }))
-        .sort((a, b) => b.total_revenue - a.total_revenue);
-      setAllItems(allItemsArr);
+      // Keep paise for category chart (accurate fractions)
+      const allItemsPaise = Array.from(itemAgg.entries()).map(([name, v], idx) => ({
+        idx,
+        item_name: name,
+        total_quantity: v.qty,
+        paise: v.paise,            // <- paise kept here
+        category: v.category,
+      }));
 
-      // categories (adjusted, guaranteed to match bill sum)
-      const totalAdjustedRevenue = allItemsArr.reduce((s, v) => s + v.total_revenue, 0);
+      // CATEGORY DATA (still uses exact decimals)
+      const totalAdjustedRevenue = allItemsPaise.reduce((s, v) => s + v.paise / 100, 0);
       const rawCategories = Array.from(
-        allItemsArr.reduce((m, item) => {
+        allItemsPaise.reduce((m, item) => {
           const c = m.get(item.category) || { revenue: 0, items: 0 };
-          c.revenue += item.total_revenue;
+          c.revenue += item.paise / 100;
           c.items += 1;
           m.set(item.category, c);
           return m;
@@ -386,6 +415,20 @@ export function PopularItemsLive() {
         }))
         .sort((a, b) => b.revenue - a.revenue);
       setCategoryData(cats);
+
+      // ---------- NEW: Produce INTEGER-rupee display values for the items table ----------
+      // Round each item's paise to whole rupees and distribute the remainder so the table total stays consistent.
+      const distributed = paiseToRupeesDistributed(allItemsPaise);
+      const allItemsDisplay: AllItem[] = distributed
+        .map((x) => ({
+          item_name: x.item_name,
+          total_quantity: x.total_quantity,
+          total_revenue: x.rupeesInt, // integer rupees for display
+          category: x.category,
+        }))
+        .sort((a, b) => b.total_revenue - a.total_revenue);
+
+      setAllItems(allItemsDisplay);
     } catch (e) {
       console.error('Error fetching items:', e);
       setPopularItems([]);
@@ -411,6 +454,7 @@ export function PopularItemsLive() {
     fetchData({ start: s, end: s });
   };
   const yesterday = () => {
+    slowScrollFix();
     const d = new Date(); d.setDate(d.getDate() - 1);
     const s = d.toISOString().split('T')[0];
     setStartDate(s); setEndDate(s);
@@ -436,6 +480,9 @@ export function PopularItemsLive() {
     setStartDate(''); setEndDate('');
     fetchData();
   };
+
+  // no-op helper to keep lints happy when editing quick picks quickly in some setups
+  function slowScrollFix() {}
 
   if (loading) return <div className="text-center py-8">Loading popular items...</div>;
 
@@ -597,7 +644,8 @@ export function PopularItemsLive() {
                         </Badge>
                       </td>
                       <td className="p-3 text-right">{item.total_quantity}</td>
-                      <td className="p-3 text-right">₹{item.total_revenue.toFixed(2)}</td>
+                      {/* INTEGER rupees, no decimals */}
+                      <td className="p-3 text-right">₹{item.total_revenue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
                     </tr>
                   );
                 })}
@@ -616,8 +664,9 @@ export function PopularItemsLive() {
                   <td className="p-3 text-right font-semibold">
                     {allItems.reduce((s, v) => s + v.total_quantity, 0)}
                   </td>
+                  {/* INTEGER rupees sum */}
                   <td className="p-3 text-right font-semibold">
-                    ₹{allItems.reduce((s, v) => s + v.total_revenue, 0).toFixed(2)}
+                    ₹{allItems.reduce((s, v) => s + v.total_revenue, 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </td>
                 </tr>
               </tfoot>
@@ -631,3 +680,4 @@ export function PopularItemsLive() {
     </div>
   );
 }
+

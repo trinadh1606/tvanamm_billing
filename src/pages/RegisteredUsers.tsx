@@ -51,6 +51,10 @@ export default function RegisteredUsers() {
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
+  // track bulk deletes by franchise (menu items / bills)
+  const [deletingMenuFids, setDeletingMenuFids] = useState<Set<string>>(new Set());
+  const [deletingBillsFids, setDeletingBillsFids] = useState<Set<string>>(new Set());
+
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState<number | null>(null);
 
@@ -106,7 +110,7 @@ export default function RegisteredUsers() {
   // Initial + when page changes
   useEffect(() => {
     fetchPage(page);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
   // Realtime: throttle-refetch current page on any change
@@ -131,7 +135,7 @@ export default function RegisteredUsers() {
         refetchTimer.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
   // Client-side filter (current page only)
@@ -335,6 +339,159 @@ export default function RegisteredUsers() {
     return Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   }, [totalCount]);
 
+  // Helpers for bulk deletes
+  const chunk = <T,>(arr: T[], size = 500): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
+
+  async function deleteMenuItemsForFranchise(fid?: string | null) {
+    const norm = fid ? normalizeFranchiseIdFlexible(fid) : null;
+    const franchiseId = (norm?.formatted || fid || '').trim();
+    if (!franchiseId) {
+      toast({ title: 'Missing franchise', description: 'No franchise_id on this row.', variant: 'destructive' });
+      return;
+    }
+    const ok = window.confirm(`Delete ALL menu items for ${franchiseId}? This cannot be undone.`);
+    if (!ok) return;
+
+    setDeletingMenuFids(prev => new Set([...prev, franchiseId]));
+
+    // Try to get count (may be blocked by RLS)
+    let toDeleteCount: number | null = null;
+    try {
+      const { count } = await supabase
+        .from('menu_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('franchise_id', franchiseId);
+      if (typeof count === 'number') toDeleteCount = count;
+    } catch {}
+
+    const { error } = await supabase
+      .from('menu_items')
+      .delete()
+      .eq('franchise_id', franchiseId);
+
+    setDeletingMenuFids(prev => {
+      const next = new Set(prev);
+      next.delete(franchiseId);
+      return next;
+    });
+
+    if (error) {
+      const msg = /row-level security|RLS|permission/i.test(error.message)
+        ? 'Delete blocked by Row Level Security. Ensure your policy allows deleting menu_items for this franchise.'
+        : error.message;
+      toast({ title: 'Menu delete failed', description: msg, variant: 'destructive' });
+      return;
+    }
+
+    toast({
+      title: 'Menu items deleted',
+      description: toDeleteCount !== null ? `Removed ${toDeleteCount} item(s) for ${franchiseId}.` : `Removed menu items for ${franchiseId}.`
+    });
+  }
+
+  async function deleteAllBillsForFranchise(fid?: string | null) {
+    const norm = fid ? normalizeFranchiseIdFlexible(fid) : null;
+    const franchiseId = (norm?.formatted || fid || '').trim();
+    if (!franchiseId) {
+      toast({ title: 'Missing franchise', description: 'No franchise_id on this row.', variant: 'destructive' });
+      return;
+    }
+    const ok = window.confirm(
+      `Delete ALL bills for ${franchiseId}? This deletes bill items first, then bills. This cannot be undone.`
+    );
+    if (!ok) return;
+
+    setDeletingBillsFids(prev => new Set([...prev, franchiseId]));
+
+    // Count bills (if allowed)
+    let billsCount: number | null = null;
+    try {
+      const { count } = await supabase
+        .from('bills_generated_billing')
+        .select('id', { count: 'exact', head: true })
+        .eq('franchise_id', franchiseId);
+      if (typeof count === 'number') billsCount = count;
+    } catch {}
+
+    // Fetch bill ids
+    const { data: bills, error: billsErr } = await supabase
+      .from('bills_generated_billing')
+      .select('id')
+      .eq('franchise_id', franchiseId)
+      .limit(100000);
+
+    if (billsErr) {
+      setDeletingBillsFids(prev => {
+        const next = new Set(prev);
+        next.delete(franchiseId);
+        return next;
+      });
+      const msg = /row-level security|RLS|permission/i.test(billsErr.message)
+        ? 'Select blocked by RLS. Ensure policy allows reading bill ids to delete.'
+        : billsErr.message;
+      toast({ title: 'Bills delete failed', description: msg, variant: 'destructive' });
+      return;
+    }
+
+    const ids = (bills ?? []).map((b: any) => b.id);
+    if (ids.length > 0) {
+      // Delete bill items in chunks
+      for (const c of chunk(ids, 500)) {
+        const { error: delItemsErr } = await supabase
+          .from('bill_items_generated_billing')
+          .delete()
+          .in('bill_id', c as any);
+        if (delItemsErr) {
+          setDeletingBillsFids(prev => {
+            const next = new Set(prev);
+            next.delete(franchiseId);
+            return next;
+          });
+          const msg = /row-level security|RLS|permission/i.test(delItemsErr.message)
+            ? 'Delete bill items blocked by RLS.'
+            : delItemsErr.message;
+          toast({ title: 'Bill items delete failed', description: msg, variant: 'destructive' });
+          return;
+        }
+      }
+
+      // Delete bills in chunks
+      for (const c of chunk(ids, 500)) {
+        const { error: delBillsErr } = await supabase
+          .from('bills_generated_billing')
+          .delete()
+          .in('id', c as any);
+        if (delBillsErr) {
+          setDeletingBillsFids(prev => {
+            const next = new Set(prev);
+            next.delete(franchiseId);
+            return next;
+          });
+          const msg = /row-level security|RLS|permission/i.test(delBillsErr.message)
+            ? 'Delete bills blocked by RLS.'
+            : delBillsErr.message;
+          toast({ title: 'Bills delete failed', description: msg, variant: 'destructive' });
+          return;
+        }
+      }
+    }
+
+    setDeletingBillsFids(prev => {
+      const next = new Set(prev);
+      next.delete(franchiseId);
+      return next;
+    });
+
+    toast({
+      title: 'Bills deleted',
+      description: billsCount !== null ? `Removed ${billsCount} bill(s) for ${franchiseId}.` : `Removed all bills for ${franchiseId}.`
+    });
+  }
+
   return (
     <DashboardLayout title="Registered Users">
       {/* Back button OUTSIDE the card, top-left */}
@@ -418,16 +575,34 @@ export default function RegisteredUsers() {
                   <th className="py-2 pr-3">Phone</th>
                   <th className="py-2 pr-3">Address</th>
                   <th className="py-2 pr-3 w-[360px]">Actions</th>
+                  {/* New columns */}
+                  <th className="py-2 pr-3">Menu Items</th>
+                  <th className="py-2 pr-3">All Bills</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={6} className="py-6 text-center text-muted-foreground">No profiles match your search.</td></tr>
+                  <tr>
+                    <td colSpan={8} className="py-6 text-center text-muted-foreground">
+                      No profiles match your search.
+                    </td>
+                  </tr>
                 )}
                 {filtered.map(row => {
                   const dirty = hasChanges(row.id);
                   const saving = savingIds.has(row.id);
                   const deleting = deletingIds.has(row.id);
+
+                  // IMPORTANT: use the persisted/original franchise_id if available,
+                  // not the possibly-unsaved edited one, so deletes hit the right data.
+                  const persistedFidRaw =
+                    original[row.id]?.franchise_id ?? row.franchise_id ?? '';
+                  const persistedFid =
+                    normalizeFranchiseIdFlexible(persistedFidRaw)?.formatted || persistedFidRaw.trim();
+
+                  const deletingMenu = persistedFid ? deletingMenuFids.has(persistedFid) : false;
+                  const deletingBills = persistedFid ? deletingBillsFids.has(persistedFid) : false;
+
                   return (
                     <tr key={row.id} className="border-b last:border-0">
                       <td className="py-2 pr-3 min-w-[160px]">
@@ -471,25 +646,7 @@ export default function RegisteredUsers() {
 
                       <td className="py-2 pr-3">
                         <div className="flex items-center gap-2 whitespace-nowrap flex-nowrap">
-                          <Button
-                            size="sm"
-                            disabled={!dirty || saving || deleting}
-                            onClick={() => saveRow(row.id)}
-                            style={{ backgroundColor: 'rgb(0,100,55)' }}
-                            className="hover:bg-[rgb(0,80,40)]"
-                          >
-                            {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
-                            Save
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={!dirty || saving || deleting}
-                            onClick={() => revertRow(row.id)}
-                          >
-                            <Undo2 className="h-4 w-4 mr-2" />
-                            Cancel
-                          </Button>
+                          {/* Order: Delete → Save → Cancel */}
                           <Button
                             size="sm"
                             variant="outline"
@@ -500,8 +657,61 @@ export default function RegisteredUsers() {
                             {deleting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
                             Delete
                           </Button>
+
+                          <Button
+                            size="sm"
+                            disabled={!dirty || saving || deleting}
+                            onClick={() => saveRow(row.id)}
+                            style={{ backgroundColor: 'rgb(0,100,55)' }}
+                            className="hover:bg-[rgb(0,80,40)]"
+                          >
+                            {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+                            Save
+                          </Button>
+
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!dirty || saving || deleting}
+                            onClick={() => revertRow(row.id)}
+                          >
+                            <Undo2 className="h-4 w-4 mr-2" />
+                            Cancel
+                          </Button>
                         </div>
                         {dirty && <div className="text-xs text-amber-600 mt-1">Unsaved changes</div>}
+                      </td>
+
+                      {/* Menu Items bulk delete */}
+                      <td className="py-2 pr-3 whitespace-nowrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!persistedFid || deletingMenu}
+                          onClick={() => deleteMenuItemsForFranchise(persistedFid)}
+                          className="text-red-600 border-red-600 hover:bg-red-50"
+                          title={`Delete all menu items for ${persistedFid || 'this franchise'}`}
+                        >
+                          {deletingMenu ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                          Delete
+                        </Button>
+                        {!persistedFid && <div className="text-xs text-muted-foreground mt-1">No franchise_id</div>}
+                      </td>
+
+                      {/* All Bills bulk delete */}
+                      <td className="py-2 pr-3 whitespace-nowrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!persistedFid || deletingBills}
+                          onClick={() => deleteAllBillsForFranchise(persistedFid)}
+                          className="text-red-600 border-red-600 hover:bg-red-50"
+                          title={`Delete all bills for ${persistedFid || 'this franchise'}`}
+                        >
+                          {deletingBills ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
+                          Delete
+                        </Button>
+                        {!persistedFid && <div className="text-xs text-muted-foreground mt-1">No franchise_id</div>}
                       </td>
                     </tr>
                   );
@@ -529,7 +739,7 @@ export default function RegisteredUsers() {
         <CardFooter className="flex flex-col gap-1 text-xs text-muted-foreground">
           <span>Tip: Franchise IDs auto-normalize to <code>FR-XXX</code> on save. Unique constraint is enforced.</span>
           <span>Deleting here removes the row from <code>public.profiles</code> only. The corresponding <code>auth.users</code> account is not deleted.</span>
-          <span>Perf tip: your UNIQUE on <code>franchise_id</code> already creates an index; ordering by it is efficient.</span>
+          <span>Bulk deletes respect Row Level Security. Ensure your policies allow deleting from the relevant tables for central admins.</span>
         </CardFooter>
       </Card>
     </DashboardLayout>

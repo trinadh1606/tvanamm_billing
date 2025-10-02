@@ -1,10 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Activity, TrendingUp, AlertCircle } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 interface LiveStats {
   currentHourRevenue: number;
@@ -19,10 +25,17 @@ interface LiveStats {
 
 interface RecentActivity {
   id: number;
-  total: number;
+  total: number;         // After Discount (net)
   created_at: string;
   items_count: number;
+  actual_total: number;  // Actual Amount (pre-discount sum of items)
 }
+
+type BillItemRow = {
+  item_name: string;
+  qty: number;
+  price: number;
+};
 
 export function RealTimeAnalytics() {
   const [liveStats, setLiveStats] = useState<LiveStats>({
@@ -37,6 +50,12 @@ export function RealTimeAnalytics() {
   });
   const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Items modal state
+  const [itemsModalOpen, setItemsModalOpen] = useState(false);
+  const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
+  const [orderItems, setOrderItems] = useState<BillItemRow[]>([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
 
   const { franchiseId } = useAuth();
   const { toast } = useToast();
@@ -94,6 +113,7 @@ export function RealTimeAnalytics() {
       const currentHourBills =
         todayBills?.filter((bill) => bill.created_at >= currentHourStart) || [];
 
+      // Pull last 10 bills and include their items (qty, price) so we can compute Actual Amount
       const { data: recentBills } = await supabase
         .from('bills_generated_billing')
         .select(
@@ -101,7 +121,7 @@ export function RealTimeAnalytics() {
           id,
           total,
           created_at,
-          bill_items_generated_billing!inner(id)
+          bill_items_generated_billing!inner(id, qty, price)
         `
         )
         .eq('franchise_id', franchiseId)
@@ -141,16 +161,59 @@ export function RealTimeAnalytics() {
         lastOrderTime,
       });
 
-      const formattedActivity =
-        recentBills?.map((bill) => ({
-          id: bill.id,
-          total: Number(bill.total),
-          created_at: bill.created_at,
-          items_count: bill.bill_items_generated_billing?.length || 0,
-        })) || [];
+      const formattedActivity: RecentActivity[] =
+        (recentBills || []).map((bill: any) => {
+          const items = bill.bill_items_generated_billing || [];
+          const actual = items.reduce(
+            (sum: number, it: any) => sum + (Number(it.qty) || 0) * (Number(it.price) || 0),
+            0
+          );
+          return {
+            id: bill.id,
+            total: Number(bill.total),             // After Discount (net)
+            created_at: bill.created_at,
+            items_count: items.length,
+            actual_total: actual,                  // Actual Amount (pre-discount)
+          };
+        });
+
       setRecentActivity(formattedActivity);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // fetch items for a given order (bill) and open modal
+  const openItemsForOrder = async (orderId: number) => {
+    setSelectedOrderId(orderId);
+    setItemsModalOpen(true);
+    setItemsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('bill_items_generated_billing')
+        .select('item_name, qty, price')
+        .eq('bill_id', orderId)
+        .order('id', { ascending: true });
+
+      if (error) throw error;
+
+      const rows: BillItemRow[] =
+        (data || []).map((r: any) => ({
+          item_name: String(r.item_name ?? ''),
+          qty: Number(r.qty) || 0,
+          price: Number(r.price) || 0,
+        })) ?? [];
+
+      setOrderItems(rows);
+    } catch (e: any) {
+      toast({
+        title: 'Error',
+        description: e.message || 'Failed to load order items',
+        variant: 'destructive',
+      });
+      setOrderItems([]);
+    } finally {
+      setItemsLoading(false);
     }
   };
 
@@ -166,9 +229,21 @@ export function RealTimeAnalytics() {
     return `${diffHours}h ${diffMins % 60}m ago`;
   };
 
+  const orderItemsTotal = orderItems.reduce(
+    (sum, it) => sum + it.qty * it.price,
+    0
+  );
+
+  const selectedOrderNetTotal = useMemo(() => {
+    const row = recentActivity.find((a) => a.id === selectedOrderId);
+    return row?.total ?? null;
+  }, [selectedOrderId, recentActivity]);
+
   if (loading) {
     return <div className="text-center py-8">Loading real-time data...</div>;
   }
+
+  const money = (n: number) => `₹${Number(n).toFixed(2)}`;
 
   return (
     <div className="space-y-6">
@@ -244,15 +319,30 @@ export function RealTimeAnalytics() {
                       style={{ backgroundColor: 'rgb(0,100,55)' }}
                     ></div>
                     <div>
-                      <span className="font-medium">Order #{activity.id}</span>
+                      {/* Clickable Order ID */}
+                      <button
+                        type="button"
+                        onClick={() => openItemsForOrder(activity.id)}
+                        className="font-medium underline text-left"
+                        style={{ color: 'rgb(0,100,55)' }}
+                        title="View items"
+                      >
+                        Order #{activity.id}
+                      </button>
                       <span className="text-muted-foreground ml-2">
                         {activity.items_count} items
                       </span>
                     </div>
                   </div>
+
                   <div className="text-right">
-                    <div className="font-bold">₹{activity.total.toFixed(2)}</div>
-                    <div className="text-xs text-muted-foreground">
+                    <div className="text-xs text-gray-600">Actual &nbsp;/&nbsp; After Discount</div>
+                    <div className="font-semibold">
+                      <span>{money(activity.actual_total)}</span>
+                      <span className="mx-2">→</span>
+                      <span className="font-bold">{money(activity.total)}</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
                       {new Date(activity.created_at).toLocaleTimeString()}
                     </div>
                   </div>
@@ -262,6 +352,50 @@ export function RealTimeAnalytics() {
           )}
         </CardContent>
       </Card>
+
+      {/* Items Modal */}
+      <Dialog open={itemsModalOpen} onOpenChange={setItemsModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="text-gray-800">
+              {selectedOrderId ? `Items for Order #${selectedOrderId}` : 'Items'}
+            </DialogTitle>
+          </DialogHeader>
+
+          {itemsLoading ? (
+            <div className="py-4 text-sm text-gray-600">Loading items…</div>
+          ) : orderItems.length === 0 ? (
+            <div className="py-4 text-sm text-gray-600">No items found for this order.</div>
+          ) : (
+            <>
+              <ul className="space-y-2 max-h-72 overflow-y-auto">
+                {orderItems.map((it, idx) => (
+                  <li key={idx} className="border p-2 rounded">
+                    <div className="font-medium" style={{ color: 'rgb(0,100,55)' }}>
+                      {it.item_name}
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      Qty: {it.qty} | Rate: ₹{it.price} | Total: ₹{(it.qty * it.price).toFixed(2)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              <div className="mt-4 border-t pt-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold" style={{ color: 'rgb(0,100,55)' }}>
+                    Actual &nbsp;/&nbsp; After Discount
+                  </span>
+                  <span className="font-semibold" style={{ color: 'rgb(0,100,55)' }}>
+                    {money(orderItemsTotal)} <span className="mx-2">→</span>{' '}
+                    {selectedOrderNetTotal !== null ? money(selectedOrderNetTotal) : '—'}
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
