@@ -18,7 +18,7 @@ interface PopularItem {
   qty: number;
   price: number;   // fetched from menu_items
   revenue: number; // menu price * qty
-  color: string;
+  color: string;   // base HSL color
 }
 
 type RawRow = {
@@ -26,6 +26,49 @@ type RawRow = {
   qty: number | string | null;
   menu_item_id: number | null;
 };
+
+// ---- tiny helpers just for styling the chart colors (do not affect data) ----
+const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+const parseHsl = (hsl: string) => {
+  const m = hsl.match(/hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)/i);
+  if (!m) return { h: 0, s: 70, l: 50 };
+  return { h: Number(m[1]), s: Number(m[2]), l: Number(m[3]) };
+};
+const toHsl = ({ h, s, l }: { h: number; s: number; l: number }) =>
+  `hsl(${Math.round(h)}, ${clamp(Math.round(s), 0, 100)}%, ${clamp(Math.round(l), 0, 100)}%)`;
+const shiftHsl = (base: string, dS = 0, dL = 0) => {
+  const { h, s, l } = parseHsl(base);
+  return toHsl({ h, s: s + dS, l: l + dL });
+};
+
+/** Build a palette of guaranteed-unique colors.
+ *  - For <= 360 slices: evenly-spaced unique hues at fixed S/L.
+ *  - For > 360: repeat the hue wheel but change S/L tiers to keep colors distinct.
+ */
+function buildUniquePalette(count: number): string[] {
+  const result: string[] = [];
+  if (count <= 0) return result;
+
+  const satTiers = [68, 60, 76];   // vary saturation if >360
+  const lightTiers = [55, 48, 62]; // vary lightness if >360
+
+  let remaining = count;
+  let tier = 0;
+
+  while (remaining > 0) {
+    const batch = Math.min(remaining, 360);
+    for (let i = 0; i < batch; i++) {
+      const hue = Math.round((i * 360) / batch) % 360; // evenly spaced, unique integers
+      const s = satTiers[tier % satTiers.length];
+      const l = lightTiers[tier % lightTiers.length];
+      result.push(`hsl(${hue}, ${s}%, ${l}%)`);
+    }
+    remaining -= batch;
+    tier++;
+  }
+
+  return result.slice(0, count);
+}
 
 export function IndividualFranchiseAnalytics({
   franchiseId,
@@ -156,20 +199,19 @@ export function IndividualFranchiseAnalytics({
         {}
       );
 
-      const generateColor = (index: number) => {
-        const hue = (index * 137.5) % 360;
-        return `hsl(${hue}, 65%, 55%)`;
-      };
+      // Sort by quantity desc
+      const entries = Object.entries(aggregated).sort((a, b) => b[1].qty - a[1].qty);
 
-      const itemsArray: PopularItem[] = Object.entries(aggregated)
-        .map(([item_name, data], index) => ({
-          item_name,
-          qty: data.qty,
-          price: data.menuPrice,
-          revenue: data.revenue,
-          color: generateColor(index),
-        }))
-        .sort((a, b) => b.qty - a.qty);
+      // Build a guaranteed-unique palette and assign in order
+      const palette = buildUniquePalette(entries.length);
+
+      const itemsArray: PopularItem[] = entries.map(([item_name, data], index) => ({
+        item_name,
+        qty: data.qty,
+        price: data.menuPrice,
+        revenue: data.revenue,
+        color: palette[index],
+      }));
 
       setPopularItems(itemsArray);
     } catch (error) {
@@ -197,32 +239,65 @@ export function IndividualFranchiseAnalytics({
               </CardHeader>
               <CardContent>
                 {popularItems.length > 0 ? (
-                  <div className="flex justify-center items-center h-[400px]">
-                    <ResponsiveContainer width="50%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={popularItems}
-                          dataKey="revenue"
-                          nameKey="item_name"
-                          cx="50%"
-                          cy="50%"
-                          outerRadius={120}
-                          innerRadius={60}
-                          paddingAngle={2}
-                          label={false}
+                  <div className="relative">
+                    {/* neon bloom behind the chart */}
+                    <div className="pointer-events-none absolute inset-6 rounded-3xl blur-2xl bg-[conic-gradient(at_top_right,_#a78bfa33,_#22d3ee33,_#34d39933,_#f472b633,_#a78bfa33)]" />
+                    <div className="relative flex justify-center items-center h-[420px] rounded-2xl border border-emerald-300/30 bg-white/80 backdrop-blur">
+                      <ResponsiveContainer width="60%" height="100%">
+                        <PieChart
+                          style={{
+                            filter:
+                              'drop-shadow(0 2px 6px rgba(16,185,129,.35)) drop-shadow(0 0 14px rgba(99,102,241,.28))',
+                          }}
                         >
-                          {popularItems.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <ChartTooltip
-                          formatter={(value, name, props) => [
-                            `₹${Number(value).toLocaleString('en-IN')}`,
-                            `${name} (${props?.payload?.qty ?? 0} sold)`,
-                          ]}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                          {/* gradient fills per-slice based on the item.base color */}
+                          <defs>
+                            {popularItems.map((entry, i) => {
+                              const id = `grad-${franchiseId}-${i}`;
+                              const c0 = shiftHsl(entry.color, +20, +14); // brighter
+                              const c1 = entry.color;                     // base
+                              const c2 = shiftHsl(entry.color, -5, -18);  // darker tail
+                              return (
+                                <linearGradient id={id} key={id} x1="0" y1="0" x2="1" y2="1">
+                                  <stop offset="0%" stopColor={c0} />
+                                  <stop offset="55%" stopColor={c1} />
+                                  <stop offset="100%" stopColor={c2} />
+                                </linearGradient>
+                              );
+                            })}
+                          </defs>
+
+                          <Pie
+                            data={popularItems}
+                            dataKey="revenue"
+                            nameKey="item_name"
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={125}
+                            innerRadius={62}
+                            paddingAngle={2.5}
+                            label={false}
+                            isAnimationActive
+                          >
+                            {popularItems.map((entry, index) => (
+                              <Cell
+                                key={`cell-${index}`}
+                                fill={`url(#grad-${franchiseId}-${index})`}
+                                stroke={shiftHsl(entry.color, +10, -10)}
+                                strokeWidth={2}
+                              />
+                            ))}
+                          </Pie>
+
+                          <ChartTooltip
+                            formatter={(value, name, props) => [
+                              `₹${Number(value).toLocaleString('en-IN')}`,
+                              `${name} (${props?.payload?.qty ?? 0} sold)`,
+                            ]}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
                   </div>
                 ) : (
                   <p className="text-center text-gray-500 py-8">
@@ -250,20 +325,28 @@ export function IndividualFranchiseAnalytics({
                       </tr>
                     </thead>
                     <tbody>
-                      {popularItems.map((item) => (
-                        <tr key={item.item_name} className="border-b border-gray-100">
-                          <td className="p-2">
-                            <div
-                              className="w-4 h-4 rounded-full"
-                              style={{ backgroundColor: item.color }}
-                            />
-                          </td>
-                          <td className="p-2">{item.item_name}</td>
-                          <td className="p-2">₹{Number(item.price).toLocaleString('en-IN')}</td>
-                          <td className="p-2">{Number(item.qty).toLocaleString('en-IN')}</td>
-                          <td className="p-2">₹{Number(item.revenue).toLocaleString('en-IN')}</td>
-                        </tr>
-                      ))}
+                      {popularItems.map((item, i) => {
+                        const c0 = shiftHsl(item.color, +20, +14);
+                        const c2 = shiftHsl(item.color, -5, -18);
+                        return (
+                          <tr key={item.item_name} className="border-b border-gray-100">
+                            <td className="p-2">
+                              <div
+                                className="w-4 h-4 rounded-full"
+                                style={{
+                                  background: `linear-gradient(135deg, ${c0}, ${item.color}, ${c2})`,
+                                  boxShadow: `0 0 8px ${c0.replace('hsl', 'hsla').replace(')', ',.5)')}`,
+                                }}
+                                title={`Slice ${i + 1}`}
+                              />
+                            </td>
+                            <td className="p-2">{item.item_name}</td>
+                            <td className="p-2">₹{Number(item.price).toLocaleString('en-IN')}</td>
+                            <td className="p-2">{Number(item.qty).toLocaleString('en-IN')}</td>
+                            <td className="p-2">₹{Number(item.revenue).toLocaleString('en-IN')}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 ) : (
