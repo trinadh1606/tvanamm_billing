@@ -25,25 +25,25 @@ import {
 } from '@/components/ui/select';
 
 interface Bill {
-  id: number | string;            // allow string BIGINT ids
+  id: number | string;
   franchise_id: string;
   mode_payment: string | null;
   created_at: string;
-  total: number;                  // discounted/net total saved on the bill
+  total: number;
   created_by: string;
 }
 
 interface BillHistoryProps {
   showAdvanced?: boolean;
-  isCentral?: boolean;
+  isCentral?: boolean; // parent can force "central view"
 }
 
 type SortField = 'created_at' | 'total' | 'franchise_id' | 'id' | 'mode_payment';
 type SortDirection = 'asc' | 'desc';
 
 type ShiftState = {
-  day: string;      // YYYY-MM-DD of activation (local)
-  startISO: string; // ISO timestamp when shift started
+  day: string;      // YYYY-MM-DD (local) when checkout was pressed
+  startISO: string; // ISO timestamp when checkout was pressed
 };
 
 export function BillHistory({ showAdvanced = false, isCentral = false }: BillHistoryProps) {
@@ -51,13 +51,9 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   const [filteredBills, setFilteredBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // gross totals (pre-discount) per bill_id — KEY AS STRING to avoid number/string mismatch
   const [grossTotals, setGrossTotals] = useState<Record<string, number>>({});
-
   const [franchiseList, setFranchiseList] = useState<string[]>([]);
   const [selectedFranchise, setSelectedFranchise] = useState<string>('ALL');
-
-  // search box to quickly jump/filter to a franchise id
   const [franchiseSearch, setFranchiseSearch] = useState<string>('');
 
   const [fromDate, setFromDate] = useState<Date | undefined>();
@@ -70,12 +66,25 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   const [billItems, setBillItems] = useState<any[]>([]);
   const [itemLoading, setItemLoading] = useState(false);
 
-  // --- Signout-for-today (per-franchise, no undo same day) ---
+  // --- Checkout-for-today (per-franchise, no undo same day) ---
   const [shiftStart, setShiftStart] = useState<Date | null>(null);
   const [shiftActive, setShiftActive] = useState<boolean>(false);
 
   const { franchiseId, role } = useAuth();
   const { toast } = useToast();
+
+  // Role flags
+  const isAdmin = (role ?? '').toLowerCase().includes('admin');
+
+  // Central view if parent says so OR the admin is at FR-CENTRAL
+  const isCentralView = isCentral || (isAdmin && (franchiseId ?? '').toUpperCase() === 'FR-CENTRAL');
+
+  // Store login = not admin and not central
+  const isStoreLogin = !isAdmin && !isCentralView;
+
+  // UI capabilities
+  const canSelectFranchise = isCentralView;     // only central gets the franchise dropdown
+  const canPickDate = isAdmin || isCentralView; // admin (any) and central get date pickers
 
   const todayStrLocal = () => {
     const d = new Date();
@@ -85,19 +94,18 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     return `${yyyy}-${mm}-${dd}`;
   };
 
-  // Franchise we are *viewing* in the table
-  // IMPORTANT: when central + ALL, don't force FR-CENTRAL; leave null so queries don't filter by franchise.
+  // Which franchise to view in the table
   const viewFranchiseId: string | null =
-    isCentral
+    isCentralView
       ? (selectedFranchise !== 'ALL' ? selectedFranchise : null)
       : (franchiseId ?? null);
 
-  const activeFranchiseId: string | null = isCentral
-    ? (selectedFranchise !== 'ALL' ? selectedFranchise : null)
-    : (franchiseId ?? null);
+  // Franchise used for checkout (same as view)
+  const activeFranchiseId: string | null =
+    isCentralView ? (selectedFranchise !== 'ALL' ? selectedFranchise : null) : (franchiseId ?? null);
 
-  // Helper: should we enforce franchise filter in queries?
-  const enforceFranchiseFilter = !isCentral || (isCentral && selectedFranchise !== 'ALL');
+  // Helper: should we enforce franchise filter in nested/item queries?
+  const enforceFranchiseFilter = !isCentralView || (isCentralView && selectedFranchise !== 'ALL');
 
   const shiftKey = (fid: string) => `bill_date_shift_state:${fid}`;
 
@@ -118,7 +126,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           setShiftActive(true);
         }
       } else {
-        // auto-reset when a new day starts
         localStorage.removeItem(shiftKey(fid));
       }
     } catch {
@@ -128,27 +135,65 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
   useEffect(() => {
     loadShiftForFranchise(activeFranchiseId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFranchiseId]);
 
+  // ✅ Start with today's window for everyone
+  useEffect(() => {
+    const t = new Date();
+    const today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+    setFromDate(today);
+    setToDate(today);
+  }, []);
+
+  // Snap STORE users to today/tomorrow depending on checkout state
+  useEffect(() => {
+    if (isStoreLogin) {
+      const t = new Date();
+      const base = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+      if (shiftActive && shiftStart) {
+        const next = new Date(base);
+        next.setDate(next.getDate() + 1);
+        setFromDate(next);
+        setToDate(next);
+      } else {
+        setFromDate(base);
+        setToDate(base);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shiftActive, shiftStart, isStoreLogin]);
+
+  // Load central franchise list (separate effect so we don’t double-fetch bills)
+  useEffect(() => {
+    const run = async () => {
+      if (!isCentralView) return;
+      try {
+        await fetchAllFranchises();
+      } catch (e) {
+        /* toast inside fetchAllFranchises */
+      }
+    };
+    run();
+  }, [isCentralView]);
+
+  // ---- Single source of truth for fetching bills ----
   useEffect(() => {
     let alive = true;
-    (async () => {
+    const run = async () => {
+      if (!fromDate || !toDate) return;
       setLoading(true);
       try {
-        if (!alive) return;
-        await fetchBills();
-        if (!alive) return;
-        if (isCentral) await fetchAllFranchises();
+        await fetchBills(viewFranchiseId ?? undefined, fromDate, toDate);
       } finally {
         if (alive) setLoading(false);
       }
-    })();
+    };
+    run();
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [franchiseId, role]);
+    // fetch when the viewing scope or dates change
+  }, [viewFranchiseId, fromDate, toDate, isCentralView]);
 
-  // Recompute gross totals any time the bill list OR selection context changes
+  // Recompute gross totals when bill list changes
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -159,18 +204,16 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       }
     })();
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bills, selectedFranchise, isCentral]);
+  }, [bills, selectedFranchise, isCentralView]);
 
   useEffect(() => {
     applyFiltersAndSort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bills, selectedFranchise, fromDate, toDate, sortField, sortDirection, shiftActive, shiftStart]);
 
   const startOfDayISO = (d: Date) => {
     const x = new Date(d);
     x.setHours(0, 0, 0, 0);
-    return x.toISOString();
+    return x.toISOString(); // works with timestamptz columns
   };
   const endOfDayISO = (d: Date) => {
     const x = new Date(d);
@@ -178,7 +221,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     return x.toISOString();
   };
 
-  // ---------- Collect ALL franchises ----------
+  // ---------- Collect ALL franchises (central only) ----------
   const fetchAllFranchises = async () => {
     try {
       let list: string[] = [];
@@ -201,7 +244,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
       list.push('FR-CENTRAL');
 
-      // sort ascending A→Z
       list = Array.from(new Set(list)).filter(Boolean).sort((a, b) => a.localeCompare(b));
       setFranchiseList(list);
 
@@ -275,46 +317,74 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     return Array.from(ids);
   };
 
+  // 🔁 Fetch ALL bills (no hard limit) via pagination
   const fetchBills = async (targetFranchise?: string, from?: Date, to?: Date) => {
-    setLoading(true);
+    if (from && to && from.getTime() > to.getTime()) {
+      toast({
+        title: 'Invalid date range',
+        description: '“From” date must be earlier than or equal to “To” date.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     try {
-      let query = supabase.from('bills_generated_billing').select('*');
+      const pageSize = 1000;
+      const hasRange = !!(from && to);
+      let allRows: Bill[] = [];
+      let fromIdx = 0;
 
-      if (isCentral) {
-        if (targetFranchise && targetFranchise !== 'ALL') {
-          query = query.eq('franchise_id', targetFranchise);
+      // ➕ SHIFT-AWARE RANGE: widen the fetch by 1 day before "from" when checkout is active
+      const widenForShift = (d: Date) => {
+        const x = new Date(d);
+        x.setDate(x.getDate() - 1);
+        return x;
+      };
+      const effectiveFrom = (shiftActive && shiftStart && from) ? widenForShift(from) : from;
+
+      const baseQuery = () => {
+        let q = supabase.from('bills_generated_billing').select('*');
+
+        if (isCentralView) {
+          if (targetFranchise && targetFranchise !== 'ALL') {
+            q = q.eq('franchise_id', targetFranchise);
+          }
+        } else if (franchiseId) {
+          q = q.eq('franchise_id', franchiseId);
         }
-      } else if (franchiseId) {
-        query = query.eq('franchise_id', franchiseId);
+
+        if (hasRange && effectiveFrom && to) {
+          q = q
+            .gte('created_at', startOfDayISO(effectiveFrom))
+            .lte('created_at', endOfDayISO(to));
+        }
+
+        return q.order('created_at', { ascending: false });
+      };
+
+      setBills([]); // avoid showing stale list while paging
+      while (true) {
+        const toIdx = fromIdx + pageSize - 1;
+        const { data, error } = await baseQuery().range(fromIdx, toIdx);
+        if (error) throw error;
+        const page = (data as Bill[]) ?? [];
+        allRows.push(...page);
+        if (page.length < pageSize) break;
+        fromIdx += pageSize;
       }
 
-      if (from && to) {
-        query = query
-          .gte('created_at', startOfDayISO(from))
-          .lte('created_at', endOfDayISO(to));
-      }
-
-      const { data, error } = await query.order('created_at', { ascending: false }).limit(1000);
-      if (error) throw error;
-
-      const rows = (data as Bill[]) || [];
-      setBills(rows);
-      // gross totals recomputed via effect
+      setBills(allRows);
     } catch (error) {
+      console.error(error);
       toast({
         title: 'Error',
         description: 'Failed to fetch bills',
         variant: 'destructive',
       });
-    } finally {
-      setLoading(false);
     }
   };
 
-  // Batch compute gross (pre-discount) totals for all fetched bills.
-  // PRIMARY (RLS-friendly): fetch from PARENT bills with a nested relation to items.
-  // FALLBACK: fetch directly from items if nested relation fails.
-  // NOTE: keys are stored as strings, always use String(id) for map access.
+  // Batch compute gross (pre-discount) totals
   const computeGrossTotals = async (rows: Bill[]) => {
     const ids = rows.map(b => b.id);
     if (ids.length === 0) {
@@ -328,27 +398,22 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       return out;
     };
 
-    // Pre-seed all bill ids with 0 so UI shows ₹0.00 if no items are present.
     const map: Record<string, number> = {};
     ids.forEach(id => { map[String(id)] = 0; });
 
     for (const batch of chunk(ids, 500)) {
-      // Normalize to numbers when possible (BIGINT columns expect numeric)
       const batchNum = (batch as (number | string)[])
         .map(v => (typeof v === 'string' && /^\d+$/.test(v)) ? Number(v) : (typeof v === 'number' ? v : NaN))
         .filter((v): v is number => Number.isFinite(v));
 
-      // --- Parent-based nested fetch (preferred) ---
       try {
         let q = supabase
           .from('bills_generated_billing')
           .select('id, franchise_id, bill_items_generated_billing ( qty, price )');
 
-        if (batchNum.length > 0) {
-          q = q.in('id', batchNum as number[]);
-        } else {
-          q = q.in('id', batch as any);
-        }
+        q = batchNum.length > 0
+          ? q.in('id', batchNum as number[])
+          : q.in('id', batch as any);
 
         if (enforceFranchiseFilter && viewFranchiseId) {
           q = q.eq('franchise_id', viewFranchiseId);
@@ -362,25 +427,20 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
             const sum = items.reduce((acc, it) => acc + (Number(it.qty) || 0) * (Number(it.price) || 0), 0);
             map[key] += sum;
           }
-          // parent path worked for this batch
           continue;
         }
       } catch {
-        // swallow and try item-based fallback
+        // fallback below
       }
 
-      // --- Fallback: item-based fetch ---
       try {
-        // Try with explicit join constraint first
         let q2 = supabase
           .from('bill_items_generated_billing')
           .select('bill_id, qty, price, bills_generated_billing!inner(franchise_id)');
 
-        if (batchNum.length > 0) {
-          q2 = q2.in('bill_id', batchNum as number[]);
-        } else {
-          q2 = q2.in('bill_id', batch as any);
-        }
+        q2 = batchNum.length > 0
+          ? q2.in('bill_id', batchNum as number[])
+          : q2.in('bill_id', batch as any);
 
         if (enforceFranchiseFilter && viewFranchiseId) {
           q2 = q2.eq('bills_generated_billing.franchise_id', viewFranchiseId);
@@ -388,23 +448,12 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
         let { data: itemsData, error: itemsErr } = await q2;
 
-        // If join fails or returns nothing, attempt without join
         if (itemsErr || !itemsData || itemsData.length === 0) {
           const alt = batchNum.length > 0
-            ? await supabase
-                .from('bill_items_generated_billing')
-                .select('bill_id, qty, price')
-                .in('bill_id', batchNum as number[])
-            : await supabase
-                .from('bill_items_generated_billing')
-                .select('bill_id, qty, price')
-                .in('bill_id', batch as any);
+            ? await supabase.from('bill_items_generated_billing').select('bill_id, qty, price').in('bill_id', batchNum as number[])
+            : await supabase.from('bill_items_generated_billing').select('bill_id, qty, price').in('bill_id', batch as any);
 
-          if (!alt.error) {
-            itemsData = alt.data || [];
-          } else {
-            itemsData = [];
-          }
+          itemsData = alt.error ? [] : (alt.data || []);
         }
 
         for (const r of (itemsData || []) as any[]) {
@@ -414,7 +463,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           map[key] += qty * price;
         }
       } catch {
-        // ignore; leave that batch as-is
+        // ignore
       }
     }
 
@@ -425,7 +474,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     setItemLoading(true);
     setSelectedBillId(billId);
     try {
-      // Try joined fetch first…
       let q = supabase
         .from('bill_items_generated_billing')
         .select('*, bills_generated_billing!inner(franchise_id)');
@@ -444,7 +492,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
 
       let { data, error } = await q;
 
-      // …then fallback to non-joined fetch if needed.
       if (error || !data || data.length === 0) {
         const alt = await supabase
           .from('bill_items_generated_billing')
@@ -469,6 +516,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
   };
 
+  // 🔁 Shift display applies to everyone on this device (admin & central too)
   const getDisplayDate = (iso: string) => {
     const original = new Date(iso);
     if (shiftActive && shiftStart && original >= shiftStart) {
@@ -491,7 +539,6 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       fromStart.setHours(0, 0, 0, 0);
       filtered = filtered.filter((bill) => getDisplayDate(bill.created_at) >= fromStart);
     }
-
     if (toDate) {
       const end = new Date(toDate);
       end.setHours(23, 59, 59, 999);
@@ -525,7 +572,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
   };
 
   const exportToExcel = () => {
-    if (isCentral && selectedFranchise === 'ALL') {
+    if (isCentralView && selectedFranchise === 'ALL') {
       toast({
         title: 'Select a franchise',
         description: 'Please choose a franchise from the dropdown to export its bills only.',
@@ -535,7 +582,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
 
     const exportSource =
-      isCentral && selectedFranchise !== 'ALL'
+      isCentralView && selectedFranchise !== 'ALL'
         ? filteredBills.filter((b) => b.franchise_id === selectedFranchise)
         : filteredBills;
 
@@ -554,8 +601,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
         'Bill ID': bill.id,
         'Franchise ID': bill.franchise_id,
         'Payment Mode': (bill.mode_payment ?? '').toUpperCase(),
-        'Actual Amount (₹)': Number(actual).toFixed(2),          // pre-discount
-        'After Discount (₹)': Number(bill.total).toFixed(2),     // net
+        'Actual Amount (₹)': Number(actual).toFixed(2),
+        'After Discount (₹)': Number(bill.total).toFixed(2),
         'Displayed Date': d.toLocaleDateString(),
         'Displayed Time': d.toLocaleTimeString(),
         'Created By': bill.created_by,
@@ -567,8 +614,8 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Bills History');
 
     let filename = 'bills-history';
-    if (isCentral && selectedFranchise !== 'ALL') filename += `-${selectedFranchise}`;
-    if (!isCentral && franchiseId) filename += `-${franchiseId}`;
+    if (isCentralView && selectedFranchise !== 'ALL') filename += `-${selectedFranchise}`;
+    if (!isCentralView && franchiseId) filename += `-${franchiseId}`;
     if (fromDate && toDate) {
       filename += `-${format(fromDate, 'yyyy-MM-dd')}_to_${format(toDate, 'yyyy-MM-dd')}`;
     }
@@ -606,27 +653,37 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
   };
 
-  // +1 column for "Actual Amount"
-  const gridCols = isCentral ? 'grid grid-cols-1 sm:grid-cols-7' : 'grid grid-cols-1 sm:grid-cols-6';
+  // +1 column for "Franchise" when central can see it
+  const gridCols = isCentralView ? 'grid grid-cols-1 sm:grid-cols-7' : 'grid grid-cols-1 sm:grid-cols-6';
 
   const activateShift = () => {
     if (!activeFranchiseId) {
       toast({
         title: 'Select a franchise',
-        description: 'Please choose a specific franchise (not “ALL”) to activate signout.',
+        description: 'Please choose a specific franchise (not "ALL") to activate signout.',
         variant: 'destructive',
       });
-      return;
     }
-    if (shiftActive) return; // already used today
+    if (!activeFranchiseId || shiftActive) return;
+
     const now = new Date();
     const state: ShiftState = { day: todayStrLocal(), startISO: now.toISOString() };
     localStorage.setItem(shiftKey(activeFranchiseId), JSON.stringify(state));
     setShiftStart(now);
     setShiftActive(true);
+
+    // Only store users auto-switch to tomorrow after checkout
+    if (isStoreLogin) {
+      const t = new Date();
+      const tomorrow = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setFromDate(tomorrow);
+      setToDate(tomorrow);
+    }
+
     toast({
       title: 'Signout for today active',
-      description: `New bills for ${activeFranchiseId} from now will be shown under tomorrow’s date in this view (for today only).`,
+      description: `New bills for ${activeFranchiseId} from now will be shown under tomorrow's date (today only).`,
     });
     applyFiltersAndSort();
   };
@@ -641,7 +698,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     return 'No bills found';
   };
 
-  // ✅ FIX: compute options without "ALL", and ensure currently selected non-ALL stays visible.
+  // Dropdown options (central only)
   const filteredFranchiseOptions = (() => {
     const base = franchiseList.filter(fid => fid && fid !== 'ALL');
     const q = franchiseSearch.trim().toLowerCase();
@@ -681,89 +738,162 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
   };
 
-  // ---------- Status text for the shift button ----------
-  const shiftStatusText = (() => {
-    if (!activeFranchiseId) return '';
-    if (!shiftActive || !shiftStart) return 'You can check out once per day.';
-    return `Checked out today at ${shiftStart.toLocaleTimeString()}. Resets automatically tomorrow.`;
-  })();
+  // Date inputs (ADMIN + CENTRAL)
+  const dateToInput = (d?: Date) => (d ? format(d, 'yyyy-MM-dd') : '');
+  const inputToDate = (v: string) => (v ? new Date(`${v}T00:00:00`) : undefined);
+  const handleDateChange = (type: 'from' | 'to', value: string) => {
+    const newDate = inputToDate(value);
+    if (type === 'from') setFromDate(newDate);
+    else setToDate(newDate);
+    // No manual fetch here; the fetch effect will run once with the new dates
+  };
+
+  const clearDates = async () => {
+    const t = new Date();
+    const today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+
+    if (isStoreLogin) {
+      const base = new Date(today);
+      if (shiftActive && shiftStart) base.setDate(base.getDate() + 1);
+      setFromDate(base);
+      setToDate(base);
+      return;
+    }
+
+    setFromDate(today);
+    setToDate(today);
+  };
 
   return (
     <Card className="bg-white">
       <CardHeader className="border-b">
-        {isCentral ? (
+        {/* Banner */}
+        <div className="text-xs text-gray-600 mb-2">
+          {canPickDate ? (
+            <>Showing <b>today&apos;s bills</b>. Pick a date (or range) to view previous days.</>
+          ) : (
+            <>Showing <b>{(shiftActive && shiftStart) ? "tomorrow’s" : "today’s"}</b> bills (auto-switches after you check out).</>
+          )}
+        </div>
+
+        {(canSelectFranchise || canPickDate) ? (
+          // Admin/Central header
           <div className="flex flex-col gap-3">
-            {/* Central view (unchanged) */}
-            <div className="flex flex-row items-end justify-between gap-3">
-              {/* Franchise selector (A→Z) */}
-              <div className="w-80">
-                <div className="text-xs mb-1" style={{ color: 'rgb(0, 100, 55)' }}>
-                  Franchise (A→Z)
-                </div>
-                <Select
-                  value={selectedFranchise}
-                  onValueChange={(val) => {
-                    setSelectedFranchise(val);
-                    setCurrentPage(1);
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select franchise" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ALL">ALL</SelectItem>
-                    {filteredFranchiseOptions.map((fid) => (
-                      <SelectItem key={fid} value={fid}>
-                        {fid}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              {/* Left side: Franchise (central only) + Date range (admin + central) */}
+              <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                {/* Franchise selector (CENTRAL ONLY) */}
+                {canSelectFranchise && (
+                  <div className="w-80">
+                    <div className="text-xs mb-1" style={{ color: 'rgb(0, 100, 55)' }}>
+                      Franchise (A→Z)
+                    </div>
+                    <Select
+                      value={selectedFranchise}
+                      onValueChange={(val) => {
+                        setSelectedFranchise(val);
+                        setCurrentPage(1);
+                      }}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select franchise" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ALL">ALL</SelectItem>
+                        {filteredFranchiseOptions.map((fid) => (
+                          <SelectItem key={fid} value={fid}>
+                            {fid}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Date range (ADMIN + CENTRAL) */}
+                {canPickDate && (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <div className="w-44">
+                      <div className="text-xs mb-1" style={{ color: 'rgb(0, 100, 55)' }}>
+                        From
+                      </div>
+                      <Input
+                        type="date"
+                        value={dateToInput(fromDate)}
+                        onChange={(e) => handleDateChange('from', e.target.value)}
+                      />
+                    </div>
+                    <div className="w-44">
+                      <div className="text-xs mb-1" style={{ color: 'rgb(0, 100, 55)' }}>
+                        To
+                      </div>
+                      <Input
+                        type="date"
+                        value={dateToInput(toDate)}
+                        onChange={(e) => handleDateChange('to', e.target.value)}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      {(fromDate || toDate) && (
+                        <Button
+                          variant="ghost"
+                          onClick={clearDates}
+                          className="mt-1 sm:mt-0"
+                          style={{ color: 'rgb(0, 100, 55)' }}
+                        >
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Quick search by franchise id */}
-              <div className="w-[28rem]">
-                <div className="text-xs mb-1" style={{ color: 'rgb(0, 100, 55)' }}>
-                  Quick Search (Franchise ID)
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                    <Input
-                      value={franchiseSearch}
-                      onChange={(e) => setFranchiseSearch(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleFranchiseSearchGo();
-                      }}
-                      placeholder="Type franchise id (e.g., FR-001) and press Enter"
-                      className="pl-8"
-                    />
+              {/* Right side: Quick franchise search (CENTRAL ONLY) */}
+              {canSelectFranchise && (
+                <div className="w-full sm:w-[28rem]">
+                  <div className="text-xs mb-1" style={{ color: 'rgb(0, 100, 55)' }}>
+                    Quick Search (Franchise ID)
                   </div>
-                  <Button
-                    variant="outline"
-                    onClick={handleFranchiseSearchGo}
-                    style={{ borderColor: 'rgb(0, 100, 55)', color: 'rgb(0, 100, 55)' }}
-                  >
-                    Go
-                  </Button>
-                  {franchiseSearch && (
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <Input
+                        value={franchiseSearch}
+                        onChange={(e) => setFranchiseSearch(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleFranchiseSearchGo();
+                        }}
+                        placeholder="Type franchise id (e.g., FR-001) and press Enter"
+                        className="pl-8"
+                      />
+                    </div>
                     <Button
-                      variant="ghost"
-                      onClick={() => setFranchiseSearch('')}
-                      style={{ color: 'rgb(0, 100, 55)' }}
+                      variant="outline"
+                      onClick={handleFranchiseSearchGo}
+                      style={{ borderColor: 'rgb(0, 100, 55)', color: 'rgb(0, 100, 55)' }}
                     >
-                      Clear
+                      Go
                     </Button>
-                  )}
+                    {franchiseSearch && (
+                      <Button
+                        variant="ghost"
+                        onClick={() => setFranchiseSearch('')}
+                        style={{ color: 'rgb(0, 100, 55)' }}
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                  <div className="text-xs mt-1 text-gray-500">
+                    Showing {filteredFranchiseOptions.length} of {franchiseList.length} franchises
+                  </div>
                 </div>
-                <div className="text-xs mt-1 text-gray-500">
-                  Showing {filteredFranchiseOptions.length} of {franchiseList.length} franchises
-                </div>
-              </div>
+              )}
             </div>
           </div>
         ) : (
-          // Non-central: add Checkout button + disclaimer ABOVE Franchise badge
+          // STORE view: Checkout + franchise badge (NO date pickers, NO dropdown)
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <div className="text-[13px] text-gray-600 leading-snug">
@@ -787,10 +917,13 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
               </Button>
             </div>
             <div className="text-xs text-gray-500">
-              {shiftStatusText}
+              {(() => {
+                if (!activeFranchiseId) return '';
+                if (!shiftActive || !shiftStart) return 'You can check out once per day.';
+                return `Checked out today at ${shiftStart.toLocaleTimeString()}. Resets automatically tomorrow.`;
+              })()}
             </div>
 
-            {/* Existing Franchise row */}
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600">Franchise:</span>
               <Badge
@@ -827,7 +960,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                 >
                   Bill ID <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
-                {isCentral && (
+                {isCentralView && (
                   <Button
                     variant="ghost"
                     onClick={() => handleSort('franchise_id')}
@@ -846,15 +979,10 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                   Payment Mode <ArrowUpDown className="ml-1 h-3 w-3" />
                 </Button>
 
-                {/* Actual Amount header */}
-                <div
-                  className="justify-start h-auto p-0 text-left"
-                  style={{ color: 'rgb(0, 100, 55)' }}
-                >
+                <div className="justify-start h-auto p-0 text-left" style={{ color: 'rgb(0, 100, 55)' }}>
                   Actual Amount
                 </div>
 
-                {/* After Discount */}
                 <Button
                   variant="ghost"
                   onClick={() => handleSort('total')}
@@ -880,7 +1008,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
               <div className="space-y-2 min-w-[700px]">
                 {currentBills.map((bill) => {
                   const displayDate = getDisplayDate(bill.created_at);
-                  const actual = grossTotals[String(bill.id)]; // use string key (pre-seeded)
+                  const actual = grossTotals[String(bill.id)];
                   return (
                     <div
                       key={String(bill.id)}
@@ -897,7 +1025,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                         </Button>
                       </div>
 
-                      {isCentral && (
+                      {isCentralView && (
                         <div className="break-words min-w-0">
                           <Badge
                             variant="outline"
@@ -930,19 +1058,11 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
                         </Badge>
                       </div>
 
-                      {/* Actual Amount (pre-discount) */}
-                      <div
-                        className="font-medium break-words min-w-0"
-                        style={{ color: 'rgb(0, 100, 55)' }}
-                      >
+                      <div className="font-medium break-words min-w-0" style={{ color: 'rgb(0, 100, 55)' }}>
                         ₹{Number(actual ?? 0).toFixed(2)}
                       </div>
 
-                      {/* After Discount (net) */}
-                      <div
-                        className="font-bold break-words min-w-0"
-                        style={{ color: 'rgb(0, 100, 55)' }}
-                      >
+                      <div className="font-bold break-words min-w-0" style={{ color: 'rgb(0, 100, 55)' }}>
                         ₹{Number(bill.total).toFixed(2)}
                       </div>
 
