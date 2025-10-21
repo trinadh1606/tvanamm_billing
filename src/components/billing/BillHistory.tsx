@@ -118,6 +118,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
           setShiftActive(true);
         }
       } else {
+        // auto-reset when a new day starts
         localStorage.removeItem(shiftKey(fid));
       }
     } catch {
@@ -617,7 +618,7 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
       });
       return;
     }
-    if (shiftActive) return;
+    if (shiftActive) return; // already used today
     const now = new Date();
     const state: ShiftState = { day: todayStrLocal(), startISO: now.toISOString() };
     localStorage.setItem(shiftKey(activeFranchiseId), JSON.stringify(state));
@@ -680,12 +681,19 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
     }
   };
 
+  // ---------- Status text for the shift button ----------
+  const shiftStatusText = (() => {
+    if (!activeFranchiseId) return '';
+    if (!shiftActive || !shiftStart) return 'You can check out once per day.';
+    return `Checked out today at ${shiftStart.toLocaleTimeString()}. Resets automatically tomorrow.`;
+  })();
+
   return (
     <Card className="bg-white">
       <CardHeader className="border-b">
         {isCentral ? (
           <div className="flex flex-col gap-3">
-            {/* CHANGED: put both controls on the same line */}
+            {/* Central view (unchanged) */}
             <div className="flex flex-row items-end justify-between gap-3">
               {/* Franchise selector (A→Z) */}
               <div className="w-80">
@@ -755,16 +763,44 @@ export function BillHistory({ showAdvanced = false, isCentral = false }: BillHis
             </div>
           </div>
         ) : (
-          // Non-central: show current franchise badge (read-only)
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Franchise:</span>
-            <Badge
-              variant="outline"
-              className="w-fit"
-              style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}
-            >
-              {franchiseId}
-            </Badge>
+          // Non-central: add Checkout button + disclaimer ABOVE Franchise badge
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div className="text-[13px] text-gray-600 leading-snug">
+                <span className="font-medium" style={{ color: 'rgb(0, 100, 55)' }}>
+                  Disclaimer:
+                </span>{' '}
+                When you click <em>Check out for today</em>, bills created from that moment will be
+                shown under the <strong>next date</strong> (today only). This can be used once per day and
+                resets automatically tomorrow.
+              </div>
+              <Button
+                onClick={activateShift}
+                disabled={shiftActive || !activeFranchiseId}
+                className="shrink-0"
+                style={{
+                  backgroundColor: shiftActive ? 'rgba(0, 100, 55, 0.2)' : 'rgb(0, 100, 55)',
+                  color: shiftActive ? 'rgb(0, 100, 55)' : 'white',
+                }}
+              >
+                {shiftActive ? 'Checked out for today' : 'Check out for today'}
+              </Button>
+            </div>
+            <div className="text-xs text-gray-500">
+              {shiftStatusText}
+            </div>
+
+            {/* Existing Franchise row */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">Franchise:</span>
+              <Badge
+                variant="outline"
+                className="w-fit"
+                style={{ backgroundColor: 'rgba(0, 100, 55, 0.1)', borderColor: 'rgb(0, 100, 55)' }}
+              >
+                {franchiseId}
+              </Badge>
+            </div>
           </div>
         )}
       </CardHeader>
