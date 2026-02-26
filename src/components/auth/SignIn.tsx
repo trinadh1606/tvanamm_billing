@@ -20,6 +20,9 @@ export function SignIn() {
 
   const handleStoreLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('--- [DEBUG] STORE LOGIN INITIATED ---');
+    console.log('[DEBUG] Raw Store Input:', { franchiseId: storeData.franchiseId });
+    
     setLoading(true);
     
     let normalizedId = storeData.franchiseId.toLowerCase().trim();
@@ -28,21 +31,37 @@ export function SignIn() {
     }
     
     const email = `store.${normalizedId}@yourdomain.com`;
+    console.log('[DEBUG] Constructed Store Email:', email);
+    console.log('[DEBUG] Calling useAuth().signIn for Store...');
     
-    const { error } = await signIn(email, storeData.password);
-    
-    if (error) {
-      toast({
-        title: "Login Failed", 
-        description: error.message || "Invalid credentials. Please check your franchise ID and password.",
-        variant: "destructive",
-      });
+    try {
+      const { error } = await signIn(email, storeData.password);
+      
+      console.log('[DEBUG] Store signIn response - Error object:', error);
+      
+      if (error) {
+        console.error('[DEBUG] Store login failed with error:', error.message);
+        toast({
+          title: "Login Failed", 
+          description: error.message || "Invalid credentials. Please check your franchise ID and password.",
+          variant: "destructive",
+        });
+      } else {
+        console.log('[DEBUG] Store login SUCCESS!');
+      }
+    } catch (err) {
+      console.error('[DEBUG] FATAL EXCEPTION during Store login. This usually means a network failure or CORS issue:', err);
+    } finally {
+      console.log('--- [DEBUG] STORE LOGIN PROCESS ENDED ---');
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('--- [DEBUG] ADMIN LOGIN INITIATED ---');
+    console.log('[DEBUG] Raw Admin Input:', { franchiseId: adminData.franchiseId, email: adminData.email });
+    
     setLoading(true);
     
     let normalizedId = adminData.franchiseId.toLowerCase().trim();
@@ -52,17 +71,30 @@ export function SignIn() {
     
     const [username, domain] = adminData.email.split('@');
     const email = `${username}+${normalizedId}@${domain}`;
+    console.log('[DEBUG] Constructed Admin Email:', email);
+    console.log('[DEBUG] Calling useAuth().signIn for Admin...');
     
-    const { error } = await signIn(email, adminData.password);
-    
-    if (error) {
-      toast({
-        title: "Login Failed",
-        description: error.message || "Invalid credentials. Please check your email, franchise ID and password.",
-        variant: "destructive",
-      });
+    try {
+      const { error } = await signIn(email, adminData.password);
+      
+      console.log('[DEBUG] Admin signIn response - Error object:', error);
+      
+      if (error) {
+        console.error('[DEBUG] Admin login failed with error:', error.message);
+        toast({
+          title: "Login Failed",
+          description: error.message || "Invalid credentials. Please check your email, franchise ID and password.",
+          variant: "destructive",
+        });
+      } else {
+        console.log('[DEBUG] Admin login SUCCESS!');
+      }
+    } catch (err) {
+      console.error('[DEBUG] FATAL EXCEPTION during Admin login. This usually means a network failure or CORS issue:', err);
+    } finally {
+      console.log('--- [DEBUG] ADMIN LOGIN PROCESS ENDED ---');
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
